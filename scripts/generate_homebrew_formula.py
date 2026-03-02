@@ -19,8 +19,9 @@ import urllib.request
 from pathlib import Path
 
 PYPI_URL = "https://pypi.org/pypi/{name}/{version}/json"
-POLL_INTERVAL = 10
-POLL_TIMEOUT = 300
+POLL_INTERVAL = 15
+PYPI_API_TIMEOUT = 600
+UV_INDEX_TIMEOUT = 600
 
 FORMULA_TEMPLATE = """\
 class Ccbot < Formula
@@ -75,11 +76,11 @@ def sdist_info(name: str, version: str) -> tuple[str, str]:
 
 def wait_for_sdist(version: str) -> tuple[str, str]:
     """Poll PyPI until ccbot sdist is available."""
-    deadline = time.monotonic() + POLL_TIMEOUT
+    deadline = time.monotonic() + PYPI_API_TIMEOUT
     while True:
         try:
             return sdist_info("ccbot", version)
-        except SystemExit, urllib.error.HTTPError:
+        except urllib.error.HTTPError:
             if time.monotonic() >= deadline:
                 raise
             print(f"Waiting for ccbot {version} on PyPI...", file=sys.stderr)
@@ -102,6 +103,7 @@ def _compile_deps(version: str) -> list[tuple[str, str]]:
                 str(reqs_out),
                 "--no-header",
                 "--no-annotate",
+                "--refresh",
             ],
             stdout=subprocess.DEVNULL,
             stderr=sys.stderr,
@@ -118,7 +120,7 @@ def _compile_deps(version: str) -> list[tuple[str, str]]:
 
 def resolve_deps(version: str) -> list[tuple[str, str]]:
     """Resolve deps with retries (uv index may lag behind PyPI API)."""
-    deadline = time.monotonic() + POLL_TIMEOUT
+    deadline = time.monotonic() + UV_INDEX_TIMEOUT
     while True:
         try:
             return _compile_deps(version)
