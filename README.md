@@ -97,6 +97,7 @@ Each Telegram Forum topic binds to one tmux window running an agent CLI. Message
 **Extensibility**
 
 - Global Telegram menu includes bot commands + default provider commands (with `↗` prefix); provider-scoped menus auto-refresh per chat/user/topic context with Telegram-scope fallbacks
+- Tmux session auto-detection — when running inside tmux, auto-discovers the session and picks up existing agent windows; duplicate instance prevention
 - Multi-instance support — run separate bots per Telegram group on the same machine
 - Configurable via environment variables
 

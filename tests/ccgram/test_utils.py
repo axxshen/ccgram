@@ -24,9 +24,51 @@ class TestCcgramDir:
         monkeypatch.setenv("CCGRAM_DIR", "/custom/config")
         assert ccgram_dir() == Path("/custom/config")
 
-    def test_returns_default_without_env(self, monkeypatch: pytest.MonkeyPatch):
+    def test_returns_default_without_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
         monkeypatch.delenv("CCGRAM_DIR", raising=False)
-        assert ccgram_dir() == Path.home() / ".ccgram"
+        monkeypatch.delenv("CCBOT_DIR", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert ccgram_dir() == tmp_path / ".ccgram"
+
+    def test_falls_back_to_legacy_ccbot_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.delenv("CCGRAM_DIR", raising=False)
+        monkeypatch.delenv("CCBOT_DIR", raising=False)
+        legacy = tmp_path / ".ccbot"
+        legacy.mkdir()
+        (legacy / ".env").write_text("TELEGRAM_BOT_TOKEN=test\n")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert ccgram_dir() == legacy
+
+    def test_falls_back_when_ccgram_dir_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.delenv("CCGRAM_DIR", raising=False)
+        monkeypatch.delenv("CCBOT_DIR", raising=False)
+        new = tmp_path / ".ccgram"
+        new.mkdir()
+        legacy = tmp_path / ".ccbot"
+        legacy.mkdir()
+        (legacy / ".env").write_text("TELEGRAM_BOT_TOKEN=test\n")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert ccgram_dir() == legacy
+
+    def test_prefers_ccgram_when_it_has_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ):
+        monkeypatch.delenv("CCGRAM_DIR", raising=False)
+        monkeypatch.delenv("CCBOT_DIR", raising=False)
+        new = tmp_path / ".ccgram"
+        new.mkdir()
+        (new / ".env").write_text("TELEGRAM_BOT_TOKEN=test\n")
+        legacy = tmp_path / ".ccbot"
+        legacy.mkdir()
+        (legacy / ".env").write_text("TELEGRAM_BOT_TOKEN=old\n")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        assert ccgram_dir() == new
 
 
 class TestAtomicWriteJson:

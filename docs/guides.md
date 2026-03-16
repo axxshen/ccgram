@@ -116,6 +116,27 @@ All settings accept both CLI flags and environment variables. CLI flags take pre
 | `AUTOCLOSE_DONE_MINUTES` / `--autoclose-done`  | `30`              | Auto-close done topics after N minutes (0=off)       |
 | `AUTOCLOSE_DEAD_MINUTES` / `--autoclose-dead`  | `10`              | Auto-close dead sessions after N minutes (0=off)     |
 
+## Tmux Session Auto-Detection
+
+When ccgram starts inside an existing tmux session, it auto-detects the session name and attaches to it instead of creating a new `ccgram` session. This is useful when you already have a tmux session with agent windows.
+
+**How it works:**
+
+1. If `$TMUX` is set and no `--tmux-session` flag is given, ccgram detects the current session name
+2. The bot's own tmux window is automatically excluded from the window list
+3. If another ccgram instance is already running in the same session, startup is refused
+
+**Override:** `--tmux-session=NAME` or `TMUX_SESSION_NAME=NAME` always takes precedence over auto-detection.
+
+**Outside tmux:** Behavior is unchanged — ccgram creates a `ccgram` session with a `__main__` placeholder window.
+
+| Scenario                         | Behavior                                            |
+| -------------------------------- | --------------------------------------------------- |
+| Outside tmux, no flags           | Creates `ccgram` session + `__main__` window        |
+| Outside tmux, `--tmux-session=X` | Creates/attaches `X` + `__main__` window            |
+| Inside tmux, no flags            | Auto-detects session, skips own window, no creation |
+| Inside tmux, `--tmux-session=X`  | Overrides auto-detect, uses `X`                     |
+
 ## Auto-Close Behavior
 
 CCGram automatically closes Telegram topics when sessions end, reducing clutter:

@@ -8,12 +8,15 @@ Provides:
   - read_session_metadata_from_jsonl(): single-pass extraction of (cwd, summary).
   - task_done_callback(): log unhandled exceptions from background asyncio tasks.
   - log_throttled(): suppress repeated identical debug messages per key.
+  - detect_tmux_context(): auto-detect tmux session name and own window ID.
+  - check_duplicate_ccgram(): check if another ccgram is running in the session.
 """
 
 import asyncio
 import contextlib
 import json
 import os
+import subprocess
 import tempfile
 import time
 from collections.abc import Callable
@@ -104,12 +107,13 @@ def ccgram_dir() -> Path:
         return Path(raw)
 
     default = Path.home() / ".ccgram"
-    if not default.exists():
-        legacy = Path.home() / ".ccbot"
-        if legacy.exists():
-            logger.warning(
-                "Found ~/.ccbot but not ~/.ccgram. Migrate with: mv ~/.ccbot ~/.ccgram"
-            )
+    legacy = Path.home() / ".ccbot"
+    # Use legacy ~/.ccbot if it has a .env and ~/.ccgram does not
+    if not (default / ".env").is_file() and (legacy / ".env").is_file():
+        logger.warning(
+            "Using legacy ~/.ccbot config dir. Migrate with: mv ~/.ccbot ~/.ccgram"
+        )
+        return legacy
     return default
 
 
@@ -208,6 +212,98 @@ def read_session_metadata_from_jsonl(file_path: str | Path) -> tuple[str, str]:
     except OSError:
         pass
     return cwd, summary
+
+
+def detect_tmux_context() -> tuple[str | None, str | None]:
+    """Detect tmux session name and own window ID in a single tmux call.
+
+    Returns (session_name, own_window_id). Either may be None.
+    Requires $TMUX to be set (running inside tmux).
+    """
+    if not os.environ.get("TMUX"):
+        return None, None
+    pane_id = os.environ.get("TMUX_PANE")
+    if not pane_id:
+        # TMUX set but no TMUX_PANE — can only get session name
+        try:
+            result = subprocess.run(
+                ["tmux", "display-message", "-p", "#{session_name}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode != 0:
+                return None, None
+            name = result.stdout.strip()
+            return (name or None), None
+        except subprocess.TimeoutExpired, FileNotFoundError:
+            return None, None
+    # Single call to get both session name and window ID
+    try:
+        result = subprocess.run(
+            [
+                "tmux",
+                "display-message",
+                "-t",
+                pane_id,
+                "-p",
+                "#{session_name}\t#{window_id}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None, None
+        parts = result.stdout.strip().split("\t", 1)
+        session_name = parts[0] if parts[0] else None
+        window_id = parts[1] if len(parts) > 1 and parts[1] else None
+        return session_name, window_id
+    except subprocess.TimeoutExpired, FileNotFoundError:
+        return None, None
+
+
+def check_duplicate_ccgram(session_name: str) -> str | None:
+    """Check if another ccgram is running in the session.
+
+    Returns error message if duplicate found, None if clear.
+    """
+    own_pane = os.environ.get("TMUX_PANE", "")
+    if not own_pane:
+        # Cannot reliably exclude self — skip duplicate check
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "tmux",
+                "list-panes",
+                "-s",
+                "-t",
+                session_name,
+                "-F",
+                "#{pane_id}\t#{window_id}\t#{pane_current_command}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired, FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.strip().splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) < 3:  # noqa: PLR2004
+            continue
+        pane_id, window_id, cmd = parts
+        if pane_id == own_pane:
+            continue
+        if cmd.strip() == "ccgram":
+            return (
+                f"Another ccgram instance is already running in "
+                f"tmux session '{session_name}' (window {window_id})"
+            )
+    return None
 
 
 def task_done_callback(task: asyncio.Task[None]) -> None:

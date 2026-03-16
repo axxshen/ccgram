@@ -163,8 +163,12 @@ class TmuxManager:
 
             for window in session.windows:
                 name = window.window_name or ""
+                window_id = window.window_id or ""
                 # Skip the main window (placeholder window)
                 if name == config.tmux_main_window_name:
+                    continue
+                # Skip our own window (auto-detect mode)
+                if config.own_window_id and window_id == config.own_window_id:
                     continue
 
                 try:

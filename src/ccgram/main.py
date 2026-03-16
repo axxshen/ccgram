@@ -72,6 +72,25 @@ def run_bot() -> None:
     ).upper()
     setup_logging(log_level)
 
+    # --- Auto-detect tmux session (before config import) ---
+    explicit_session = os.environ.get("TMUX_SESSION_NAME")
+    auto_detected = False
+
+    if not explicit_session and os.environ.get("TMUX"):
+        from .utils import check_duplicate_ccgram, detect_tmux_context
+
+        detected, own_wid = detect_tmux_context()
+        if detected:
+            os.environ["TMUX_SESSION_NAME"] = detected
+            auto_detected = True
+
+        dup = check_duplicate_ccgram(detected or "ccgram")
+        if dup:
+            print(f"Error: {dup}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        own_wid = None
+
     try:
         from .config import config
     except ValueError as e:
@@ -88,6 +107,9 @@ def run_bot() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
+    if own_wid:
+        config.own_window_id = own_wid
+
     logger = structlog.get_logger()
 
     from .tmux_manager import tmux_manager
@@ -95,7 +117,16 @@ def run_bot() -> None:
     logger.info("Allowed users: %s", config.allowed_users)
     logger.info("Claude projects path: %s", config.claude_projects_path)
 
-    session = tmux_manager.get_or_create_session()
+    # In auto-detect mode, session must already exist
+    if auto_detected:
+        session = tmux_manager.get_session()
+        if not session:
+            logger.error("Tmux session '%s' not found", config.tmux_session_name)
+            sys.exit(1)
+        logger.info("Auto-detected tmux session '%s'", session.session_name)
+    else:
+        session = tmux_manager.get_or_create_session()
+
     logger.info("Tmux session '%s' ready", session.session_name)
 
     logger.info("Starting Telegram bot...")

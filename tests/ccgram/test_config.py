@@ -60,6 +60,18 @@ class TestConfigValid:
 
 
 @pytest.mark.usefixtures("_base_env")
+class TestOwnWindowId:
+    def test_own_window_id_default_none(self):
+        cfg = Config()
+        assert cfg.own_window_id is None
+
+    def test_own_window_id_set_directly(self):
+        cfg = Config()
+        cfg.own_window_id = "@3"
+        assert cfg.own_window_id == "@3"
+
+
+@pytest.mark.usefixtures("_base_env")
 class TestConfigMissingEnv:
     def test_missing_telegram_bot_token(self, monkeypatch):
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)

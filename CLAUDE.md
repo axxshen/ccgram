@@ -51,6 +51,13 @@ ccgram --autoclose-dead 0              # Disable auto-close for dead sessions
 - User-data keys: all `context.user_data` string keys are defined in `handlers/user_state.py` — import from there, never use raw strings.
 - Specific exceptions: catch specific exception types (`OSError`, `ValueError`, etc.), never bare `except Exception`.
 
+## Tmux Session Auto-Detection
+
+When ccgram starts inside an existing tmux session (i.e. `$TMUX` is set) and no explicit `--tmux-session` flag is given, it auto-detects the current session and attaches to it — no session creation, no `__main__` placeholder window. The bot also detects and excludes its own tmux window from the window list. If another ccgram instance is already running in the same session, startup is refused with an error.
+
+- `--tmux-session` flag overrides auto-detection (backward compatible).
+- Outside tmux, behavior is unchanged (creates `ccgram` session + `__main__` window).
+
 ## Configuration
 
 - **Precedence**: CLI flag > env var > `.env` file > default.
