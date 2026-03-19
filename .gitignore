@@ -50,6 +50,9 @@ pkg/
 # ai artificats to skip
 .brainstorming/
 
+# Blog posts and social media drafts
+posts/
+
 
 # ralphex progress logs
 progress*.txt
