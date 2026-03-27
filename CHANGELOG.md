@@ -4,10 +4,35 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.3.4] - 2026-03-27
+
+### Added
+- Reduce General topic noise with pin-once + reaction fallback
+- Reduce General topic noise with pin-once + reaction fallback ([#41](https://github.com/alexei-led/ccgram/pull/41))
+- Add shutdown notification and signal diagnostics
+- Hide underscore-prefixed tmux windows from window list
+
+
+### Changed
+- Remove unnecessary __future__ annotations import
+
+
+### Documentation
+- Align provider emoji in README diagram with code [skip ci]
+
+
+### Fixed
+- Guard General topic handler with is_general_topic check
+- Harden service resilience against crashes and silent degradation ([#42](https://github.com/alexei-led/ccgram/pull/42))
+
 ## [2.3.3] - 2026-03-26
 
 ### Added
 - /release skill with LLM-crafted notes, portable project settings [skip ci]
+
+
+### Documentation
+- Update CHANGELOG.md for v2.3.3
 
 
 ### Fixed
