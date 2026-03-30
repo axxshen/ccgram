@@ -7,6 +7,8 @@ overlay (task, team). Branch is detected via ``git rev-parse`` in the window's c
 Key functions: list_peers(), register_declared(), clear_declared().
 """
 
+from __future__ import annotations
+
 import json
 import subprocess
 from dataclasses import dataclass
@@ -14,11 +16,19 @@ from fnmatch import fnmatch
 from pathlib import Path
 import structlog
 
-from .config import config
-from .session import WindowState
 from .utils import atomic_write_json
 
 logger = structlog.get_logger()
+
+
+@dataclass
+class WindowInfo:
+    """Lightweight window state for peer discovery (no config dependency)."""
+
+    cwd: str = ""
+    window_name: str = ""
+    provider_name: str = ""
+    external: bool = False
 
 
 @dataclass
@@ -36,6 +46,8 @@ class PeerInfo:
 
 
 def _default_declared_path() -> Path:
+    from .config import config
+
     return config.mailbox_dir / "declared.json"
 
 
@@ -106,7 +118,7 @@ def clear_declared(window_id: str, *, path: Path | None = None) -> None:
 
 def list_peers(
     *,
-    window_states: dict[str, WindowState],
+    window_states: dict[str, WindowInfo],
     tmux_session: str,
     declared_path: Path | None = None,
     filter_provider: str | None = None,

@@ -38,7 +38,7 @@ def state_dir(tmp_path: Path) -> Path:
 def _patch_dirs(state_dir: Path, mailbox_dir: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("ccgram.msg_cmd.ccgram_dir", lambda: state_dir)
     monkeypatch.setattr("ccgram.msg_cmd._get_mailbox_dir", lambda: mailbox_dir)
-    monkeypatch.setattr("ccgram.handlers.msg_spawn.ccgram_dir", lambda: state_dir)
+    monkeypatch.setattr("ccgram.spawn_request.ccgram_dir", lambda: state_dir)
     monkeypatch.setenv("CCGRAM_WINDOW_ID", "ccgram:@0")
 
 
@@ -568,8 +568,7 @@ class TestWindowSelfIdentification:
     ):
         monkeypatch.delenv("CCGRAM_WINDOW_ID", raising=False)
         monkeypatch.setenv("TMUX_PANE", "%5")
-        monkeypatch.setattr("ccgram.msg_cmd.tmux_session_name", lambda: "myses")
-        mock_result = type("R", (), {"returncode": 0, "stdout": "@3\n"})()
+        mock_result = type("R", (), {"returncode": 0, "stdout": "myses:@3\n"})()
         with patch("ccgram.msg_cmd.subprocess.run", return_value=mock_result):
             mailbox.send(
                 from_id="ccgram:@1",
@@ -658,7 +657,7 @@ class TestSpawnCmd:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ):
-        from ccgram.handlers.msg_spawn import reset_spawn_state
+        from ccgram.spawn_request import reset_spawn_state
 
         reset_spawn_state()
         monkeypatch.setenv("CCGRAM_MSG_SPAWN_RATE", "1")

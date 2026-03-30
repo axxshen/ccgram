@@ -7,6 +7,8 @@ Window self-identification via ``CCGRAM_WINDOW_ID`` env var or tmux fallback.
 Key entry point: msg_group (Click group registered in cli.py).
 """
 
+from __future__ import annotations
+
 import json
 import os
 import subprocess
@@ -14,14 +16,16 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 import structlog
 
 from .mailbox import Mailbox, Message
-from .msg_discovery import PeerInfo, list_peers, register_declared
-from .session import WindowState
 from .utils import ccgram_dir, tmux_session_name
+
+if TYPE_CHECKING:
+    from .msg_discovery import PeerInfo, WindowInfo
 
 _CONTEXT_CACHE: dict[str, str] | None = None
 
@@ -32,6 +36,18 @@ _RATE_WINDOW_SECONDS = 300  # 5 minutes
 
 def _get_mailbox_dir() -> Path:
     return ccgram_dir() / "mailbox"
+
+
+def _infer_tmux_session() -> str:
+    """Infer the tmux session name for qualifying bare window IDs.
+
+    Uses CCGRAM_WINDOW_ID session prefix (most reliable in agent context),
+    falls back to TMUX_SESSION_NAME env var, then 'ccgram' default.
+    """
+    env_id = os.environ.get("CCGRAM_WINDOW_ID", "")
+    if env_id and ":" in env_id:
+        return env_id.rsplit(":", 1)[0]
+    return tmux_session_name()
 
 
 def _get_my_window_id() -> str:
@@ -52,15 +68,20 @@ def _get_my_window_id() -> str:
 
     try:
         result = subprocess.run(
-            ["tmux", "display-message", "-p", "-t", tmux_pane, "#{window_id}"],
+            [
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                tmux_pane,
+                "#{session_name}:#{window_id}",
+            ],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            window_id = result.stdout.strip()
-            session = tmux_session_name()
-            return f"{session}:{window_id}"
+            return result.stdout.strip()
     except OSError, subprocess.TimeoutExpired:
         pass
 
@@ -75,9 +96,16 @@ def _build_message_context(my_id: str) -> dict[str, str]:
         return _CONTEXT_CACHE
 
     ctx: dict[str, str] = {}
-    bare_id = my_id.rsplit(":", 1)[-1] if ":" in my_id else my_id
     states = _load_window_states()
-    ws = states.get(bare_id)
+    # Try qualified ID first, then bare ID (state.json keys are bare local IDs).
+    # Only fall back to bare ID for local-session windows so that a foreign
+    # agent (e.g. emdash) never picks up a local window's context.
+    ws = states.get(my_id)
+    if ws is None and ":" in my_id:
+        session_prefix = my_id.rsplit(":", 1)[0]
+        if session_prefix == _infer_tmux_session():
+            bare_id = my_id.rsplit(":", 1)[-1]
+            ws = states.get(bare_id)
     if ws:
         if ws.window_name:
             ctx["window_name"] = ws.window_name
@@ -91,8 +119,10 @@ def _build_message_context(my_id: str) -> dict[str, str]:
     return ctx
 
 
-def _load_window_states() -> dict[str, WindowState]:
+def _load_window_states() -> dict[str, WindowInfo]:
     """Load window states from state.json (same as status_cmd pattern)."""
+    from .msg_discovery import WindowInfo
+
     state_file = ccgram_dir() / "state.json"
     if not state_file.exists():
         return {}
@@ -100,10 +130,10 @@ def _load_window_states() -> dict[str, WindowState]:
         data = json.loads(state_file.read_text())
     except json.JSONDecodeError, OSError:
         return {}
-    result: dict[str, WindowState] = {}
+    result: dict[str, WindowInfo] = {}
     for window_id, ws_data in data.get("window_states", {}).items():
         if isinstance(ws_data, dict):
-            result[window_id] = WindowState(
+            result[window_id] = WindowInfo(
                 cwd=ws_data.get("cwd", ""),
                 window_name=ws_data.get("window_name", ""),
                 provider_name=ws_data.get("provider_name", ""),
@@ -175,6 +205,26 @@ def _get_wait_timeout() -> int:
     return int(os.environ.get("CCGRAM_MSG_WAIT_TIMEOUT", "60"))
 
 
+def _wait_for_reply(mailbox: Mailbox, my_id: str, msg_id: str, wait_file: Path) -> None:
+    """Block until a reply to msg_id arrives or timeout expires."""
+    timeout = _get_wait_timeout()
+    deadline = time.monotonic() + timeout
+    click.echo(f"Sent {msg_id}, waiting for reply (timeout: {timeout}s)...")
+    try:
+        wait_file.write_text(msg_id)
+        while time.monotonic() < deadline:
+            messages = mailbox.inbox(my_id)
+            for m in messages:
+                if m.reply_to == msg_id:
+                    click.echo(f"Reply from {m.from_id}: {m.body}")
+                    sys.exit(0)
+            time.sleep(1)
+        click.echo("Error: wait timeout — no reply received", err=True)
+        sys.exit(1)
+    finally:
+        wait_file.unlink(missing_ok=True)
+
+
 @click.group("msg", help="Inter-agent messaging commands.")
 def msg_group() -> None:
     pass
@@ -186,8 +236,10 @@ def msg_group() -> None:
 )
 def list_peers_cmd(as_json: bool) -> None:
     """List all known peer agent windows."""
+    from .msg_discovery import list_peers
+
     window_states = _load_window_states()
-    session = tmux_session_name()
+    session = _infer_tmux_session()
     declared_path = _get_mailbox_dir() / "declared.json"
     peers = list_peers(
         window_states=window_states,
@@ -211,8 +263,10 @@ def find_cmd(
     provider: str | None, team: str | None, cwd: str | None, as_json: bool
 ) -> None:
     """Find peers matching filters."""
+    from .msg_discovery import list_peers
+
     window_states = _load_window_states()
-    session = tmux_session_name()
+    session = _infer_tmux_session()
     declared_path = _get_mailbox_dir() / "declared.json"
     peers = list_peers(
         window_states=window_states,
@@ -262,6 +316,20 @@ def send_cmd(
         )
         sys.exit(1)
 
+    wait_file: Path | None = None
+    if wait_reply:
+        wait_file = _get_mailbox_dir() / f".waiting-{my_id.replace(':', '-')}"
+        wait_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(wait_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except FileExistsError:
+            click.echo(
+                "Error: already waiting for a reply (one outstanding --wait per window)",
+                err=True,
+            )
+            sys.exit(1)
+
     msg_type = "notify" if notify else "request"
 
     kwargs: dict = {
@@ -279,34 +347,14 @@ def send_cmd(
 
     try:
         msg = mailbox.send(**kwargs)
-    except ValueError as exc:
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        if wait_file is not None:
+            wait_file.unlink(missing_ok=True)
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    if wait_reply:
-        wait_file = _get_mailbox_dir() / f".waiting-{my_id.replace(':', '-')}"
-        if wait_file.exists():
-            click.echo(
-                "Error: already waiting for a reply (one outstanding --wait per window)",
-                err=True,
-            )
-            sys.exit(1)
-        timeout = _get_wait_timeout()
-        deadline = time.monotonic() + timeout
-        click.echo(f"Sent {msg.id}, waiting for reply (timeout: {timeout}s)...")
-        wait_file.write_text(msg.id)
-        try:
-            while time.monotonic() < deadline:
-                messages = mailbox.inbox(my_id)
-                for m in messages:
-                    if m.reply_to == msg.id:
-                        click.echo(f"Reply from {m.from_id}: {m.body}")
-                        sys.exit(0)
-                time.sleep(1)
-            click.echo("Error: wait timeout — no reply received", err=True)
-            sys.exit(1)
-        finally:
-            wait_file.unlink(missing_ok=True)
+    if wait_file is not None:
+        _wait_for_reply(mailbox, my_id, msg.id, wait_file)
     else:
         click.echo(f"Sent {msg.id}")
 
@@ -373,6 +421,8 @@ def broadcast_cmd(
     ttl: int | None,
 ) -> None:
     """Broadcast a message to all matching peers."""
+    from .msg_discovery import list_peers
+
     my_id = _get_my_window_id()
     mailbox = Mailbox(_get_mailbox_dir())
     rate_limit = _get_msg_rate_limit()
@@ -384,7 +434,7 @@ def broadcast_cmd(
         sys.exit(1)
 
     window_states = _load_window_states()
-    session = tmux_session_name()
+    session = _infer_tmux_session()
     declared_path = _get_mailbox_dir() / "declared.json"
 
     peers = list_peers(
@@ -418,6 +468,8 @@ def broadcast_cmd(
 @click.option("--team", default=None, help="Team name.")
 def register_cmd(task: str | None, team: str | None) -> None:
     """Register self-declared metadata (task, team)."""
+    from .msg_discovery import register_declared
+
     if task is None and team is None:
         click.echo("Error: at least one of --task or --team required", err=True)
         sys.exit(1)
@@ -452,7 +504,7 @@ def spawn_cmd(
     auto: bool,
 ) -> None:
     """Request spawning a new agent window."""
-    from .handlers.msg_spawn import (
+    from .spawn_request import (
         check_max_windows,
         check_spawn_rate,
         create_spawn_request,

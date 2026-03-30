@@ -7,13 +7,15 @@ import pytest
 from ccgram.handlers.msg_spawn import (
     CB_SPAWN_APPROVE,
     CB_SPAWN_DENY,
+    handle_spawn_approval,
+    handle_spawn_denial,
+)
+from ccgram.spawn_request import (
     _pending_requests,
     check_max_windows,
     check_spawn_rate,
     clear_spawn_state,
     create_spawn_request,
-    handle_spawn_approval,
-    handle_spawn_denial,
     record_spawn,
     reset_spawn_state,
 )
@@ -21,9 +23,7 @@ from ccgram.handlers.msg_spawn import (
 
 @pytest.fixture(autouse=True)
 def _clean_state(tmp_path: Path):
-    with patch(
-        "ccgram.handlers.msg_spawn._spawns_dir", return_value=tmp_path / "spawns"
-    ):
+    with patch("ccgram.spawn_request._spawns_dir", return_value=tmp_path / "spawns"):
         reset_spawn_state()
         yield
         reset_spawn_state()
@@ -126,7 +126,7 @@ class TestSpawnRateLimiting:
         assert check_spawn_rate("ccgram:@5", max_rate=3)
 
     def test_old_spawns_expire(self):
-        from ccgram.handlers.msg_spawn import _save_spawn_log
+        from ccgram.spawn_request import _save_spawn_log
 
         now = time.time()
         _save_spawn_log({"ccgram:@0": [now - 4000, now - 3700, now - 3500]})
@@ -219,6 +219,7 @@ class TestApprovalFlow:
             result = await handle_spawn_approval(spawn_request.id, mock_bot)
 
         assert result is None
+        assert spawn_request.id not in _pending_requests
 
     async def test_deny_removes_request(self, spawn_request):
         req_id = spawn_request.id

@@ -1,39 +1,36 @@
 """Agent spawn request handling with Telegram approval.
 
-Manages spawn requests from agents: validation, rate limiting,
-approval/denial flow, window creation, and topic auto-creation.
+Manages the Telegram approval/denial flow, window creation, and topic
+auto-creation for spawn requests. Pure spawn request functions (data types,
+rate limiting, file CRUD) live in ``spawn_request.py`` to avoid pulling in
+config/handler dependencies from CLI context.
+
 Uses callback_registry self-registration for inline keyboard dispatch.
 
-Spawn requests are persisted to disk (``spawns/`` dir inside mailbox)
-so the bot process can read requests written by CLI subprocesses.
-
 Key components:
-  - SpawnRequest: dataclass for pending spawn requests
-  - create_spawn_request: validate and store a new request
   - handle_spawn_approval: create window + topic on approval
   - handle_spawn_denial: reject and clean up
-  - scan_spawn_requests: read pending requests from disk (for broker)
   - Telegram callback handlers for [Approve] / [Deny] buttons
 """
 
 from __future__ import annotations
 
-import contextlib
-import json
-import time
-import uuid
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from ..providers import resolve_launch_command
 from ..session import session_manager
+from ..spawn_request import (
+    SpawnRequest,
+    SpawnResult,
+    _pending_requests,
+    _spawns_dir,
+)
 from ..tmux_manager import tmux_manager
-from ..utils import ccgram_dir
 from .callback_registry import register
 from .message_sender import rate_limit_send_message
 
@@ -45,204 +42,11 @@ logger = structlog.get_logger()
 CB_SPAWN_APPROVE = "sp:ok:"
 CB_SPAWN_DENY = "sp:no:"
 
-_SPAWN_RATE_WINDOW_SECONDS = 3600  # 1 hour
-
-
-@dataclass
-class SpawnRequest:
-    id: str
-    requester_window: str
-    provider: str
-    cwd: str
-    prompt: str
-    context_file: str | None = None
-    auto: bool = False
-    created_at: float = field(default_factory=time.time)
-
-    def is_expired(self, timeout: int = 300) -> bool:
-        return time.time() - self.created_at > timeout
-
-    def to_dict(self) -> dict:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> SpawnRequest:
-        return cls(
-            id=data["id"],
-            requester_window=data["requester_window"],
-            provider=data.get("provider", "claude"),
-            cwd=data["cwd"],
-            prompt=data.get("prompt", ""),
-            context_file=data.get("context_file"),
-            auto=data.get("auto", False),
-            created_at=data.get("created_at", 0.0),
-        )
-
-
-@dataclass
-class SpawnResult:
-    window_id: str
-    window_name: str
-
-
-# In-memory cache of requests loaded from disk (bot process only).
-_pending_requests: dict[str, SpawnRequest] = {}
-
-
-def _spawns_dir() -> Path:
-    return ccgram_dir() / "mailbox" / "spawns"
-
-
-def _spawn_timeout() -> int:
-    from ..config import config
-
-    return config.msg_spawn_timeout
-
-
-def reset_spawn_state() -> None:
-    _pending_requests.clear()
-
-
-def clear_spawn_state(window_id: str) -> None:
-    to_remove = [
-        rid
-        for rid, req in _pending_requests.items()
-        if req.requester_window == window_id
-    ]
-    for rid in to_remove:
-        del _pending_requests[rid]
-    # Also clean up any spawn files from this requester
-    sdir = _spawns_dir()
-    if sdir.is_dir():
-        for entry in sdir.iterdir():
-            if not entry.name.endswith(".json"):
-                continue
-            try:
-                data = json.loads(entry.read_text())
-                if data.get("requester_window") == window_id:
-                    entry.unlink(missing_ok=True)
-            except json.JSONDecodeError, OSError:
-                continue
-
-
-def check_max_windows(
-    window_states: dict,
-    max_windows: int,
-) -> bool:
-    return len(window_states) < max_windows
-
-
-def _load_spawn_log() -> dict[str, list[float]]:
-    """Load spawn rate log from disk."""
-    path = _spawns_dir() / "rate_log.json"
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except json.JSONDecodeError, OSError:
-            return {}
-    return {}
-
-
-def _save_spawn_log(log: dict[str, list[float]]) -> None:
-    """Save spawn rate log to disk."""
-    sdir = _spawns_dir()
-    sdir.mkdir(parents=True, exist_ok=True)
-    path = sdir / "rate_log.json"
-    from ..utils import atomic_write_json
-
-    atomic_write_json(path, log)
-
-
-def check_spawn_rate(window_id: str, max_rate: int) -> bool:
-    log = _load_spawn_log()
-    cutoff = time.time() - _SPAWN_RATE_WINDOW_SECONDS
-    timestamps = log.get(window_id, [])
-    recent = [t for t in timestamps if t > cutoff]
-    return len(recent) < max_rate
-
-
-def record_spawn(window_id: str) -> None:
-    log = _load_spawn_log()
-    log.setdefault(window_id, []).append(time.time())
-    # Prune old entries
-    cutoff = time.time() - _SPAWN_RATE_WINDOW_SECONDS
-    for wid in log:
-        log[wid] = [t for t in log[wid] if t > cutoff]
-    _save_spawn_log(log)
-
-
-def create_spawn_request(
-    requester_window: str,
-    provider: str,
-    cwd: str,
-    prompt: str,
-    context_file: str | None = None,
-    auto: bool = False,
-) -> SpawnRequest:
-    if not Path(cwd).is_dir():
-        raise ValueError(f"cwd does not exist: {cwd}")
-
-    request_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    req = SpawnRequest(
-        id=request_id,
-        requester_window=requester_window,
-        provider=provider,
-        cwd=cwd,
-        prompt=prompt,
-        context_file=context_file,
-        auto=auto,
-    )
-
-    # Store in memory (for same-process access) and persist to disk
-    # (so the bot process can find requests from CLI subprocesses).
-    _pending_requests[request_id] = req
-    sdir = _spawns_dir()
-    sdir.mkdir(parents=True, exist_ok=True)
-    (sdir / f"{request_id}.json").write_text(json.dumps(req.to_dict(), indent=2))
-
-    # Record for rate limiting (file-based, shared across processes)
-    record_spawn(requester_window)
-
-    return req
-
-
-def scan_spawn_requests() -> list[SpawnRequest]:
-    """Read pending spawn request files from disk.
-
-    Called by the broker cycle in the bot process. Loads new requests
-    into ``_pending_requests`` and returns them for keyboard posting.
-    """
-    sdir = _spawns_dir()
-    if not sdir.is_dir():
-        return []
-
-    new_requests: list[SpawnRequest] = []
-    for entry in sdir.iterdir():
-        if not entry.name.endswith(".json") or entry.name == "rate_log.json":
-            continue
-        try:
-            data = json.loads(entry.read_text())
-            req = SpawnRequest.from_dict(data)
-        except json.JSONDecodeError, OSError, KeyError:
-            continue
-
-        if req.id in _pending_requests:
-            continue
-
-        if req.is_expired(timeout=_spawn_timeout()):
-            with contextlib.suppress(OSError):
-                entry.unlink()
-            continue
-
-        _pending_requests[req.id] = req
-        new_requests.append(req)
-
-    return new_requests
-
 
 async def handle_spawn_approval(
     request_id: str,
     bot: Bot,
+    spawn_timeout: int = 300,
 ) -> SpawnResult | None:
     req = _pending_requests.pop(request_id, None)
     if req is None:
@@ -251,9 +55,11 @@ async def handle_spawn_approval(
         )
         return None
 
-    # Remove the file from disk
-    spawn_file = _spawns_dir() / f"{request_id}.json"
-    spawn_file.unlink(missing_ok=True)
+    if req.is_expired(timeout=spawn_timeout):
+        spawn_file = _spawns_dir() / f"{request_id}.json"
+        spawn_file.unlink(missing_ok=True)
+        logger.info("Spawn request %s expired before approval", request_id)
+        return None
 
     launch_command = resolve_launch_command(req.provider)
 
@@ -263,11 +69,24 @@ async def handle_spawn_approval(
     )
     if not success:
         logger.error("Spawn window creation failed: %s", message)
+        # Leave file on disk; next scan_spawn_requests() cycle will
+        # re-discover it and post a fresh approval keyboard.
         return None
+
+    # Window created — remove the request file (point of no return)
+    spawn_file = _spawns_dir() / f"{request_id}.json"
+    spawn_file.unlink(missing_ok=True)
 
     session_manager.set_window_provider(window_id, req.provider, cwd=req.cwd)
 
-    await _create_topic_for_spawn(bot, window_id, window_name, req)
+    try:
+        await _create_topic_for_spawn(bot, window_id, window_name, req)
+    except TelegramError:
+        logger.warning(
+            "Topic creation failed for spawned window %s, window still active",
+            window_id,
+            exc_info=True,
+        )
 
     if req.provider == "claude":
         from ..msg_skill import ensure_skill_installed
@@ -304,12 +123,16 @@ async def post_spawn_approval_keyboard(
     bot: Bot,
     requester_window: str,
     request: SpawnRequest,
-) -> None:
+) -> bool:
+    """Post a Telegram approval keyboard for a spawn request.
+
+    Returns True if the keyboard was successfully posted, False otherwise.
+    """
     from .msg_telegram import _resolve_topic
 
     topic = _resolve_topic(requester_window)
     if topic is None:
-        return
+        return False
 
     _, thread_id, chat_id, _ = topic
 
@@ -333,13 +156,14 @@ async def post_spawn_approval_keyboard(
         ]
     )
 
-    await rate_limit_send_message(
+    result = await rate_limit_send_message(
         bot,
         chat_id,
         text,
         message_thread_id=thread_id,
         reply_markup=keyboard,
     )
+    return result is not None
 
 
 async def _create_topic_for_spawn(
@@ -378,8 +202,6 @@ async def _handle_spawn_callback(
 ) -> None:
     import contextlib as _contextlib
 
-    from telegram.error import TelegramError
-
     query = update.callback_query
     if not query or not query.data:
         return
@@ -391,7 +213,11 @@ async def _handle_spawn_callback(
         request_id = data[len(CB_SPAWN_APPROVE) :]
         bot = update.get_bot()
         try:
-            result = await handle_spawn_approval(request_id, bot)
+            from ..config import config as _cfg
+
+            result = await handle_spawn_approval(
+                request_id, bot, spawn_timeout=_cfg.msg_spawn_timeout
+            )
         except TelegramError:
             logger.warning("Spawn approval failed for %s", request_id, exc_info=True)
             result = None

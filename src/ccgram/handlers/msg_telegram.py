@@ -29,6 +29,7 @@ from telegram import (
 from telegram.ext import ContextTypes
 
 from ..thread_router import thread_router
+from ..utils import tmux_session_name
 from .callback_registry import register
 from .message_sender import rate_limit_send_message
 
@@ -60,25 +61,60 @@ def _extract_window_id(qualified_id: str) -> str:
     return parts[1]
 
 
+def _is_local_qualified(qualified_id: str) -> bool:
+    """Check if a qualified ID belongs to the local tmux session.
+
+    Bare IDs (no colon) are considered local.  Qualified IDs are local
+    only when their session prefix matches ``tmux_session_name()``.
+    """
+    if ":" not in qualified_id:
+        return True
+    session_prefix = qualified_id.rsplit(":", 1)[0]
+    return session_prefix == tmux_session_name()
+
+
 def _resolve_topic(
     qualified_id: str,
 ) -> tuple[int, int, int, str] | None:
     """Find the Telegram topic for a qualified window ID.
 
+    Tries the full qualified ID first (for foreign/emdash windows whose
+    bindings store the full ID), then falls back to the bare window ID
+    (for local windows stored as ``@N``).  The bare-ID fallback is
+    restricted to the local tmux session so that foreign IDs like
+    ``other-session:@0`` never match local ``@0``.
+
     Returns (user_id, thread_id, chat_id, window_id) or None.
     """
-    window_id = _extract_window_id(qualified_id)
+    bare_id = _extract_window_id(qualified_id)
+    # First pass: exact qualified ID match (prevents local @N from shadowing foreign IDs)
     for user_id, thread_id, bound_wid in thread_router.iter_thread_bindings():
-        if bound_wid == window_id:
+        if bound_wid == qualified_id:
             chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-            return user_id, thread_id, chat_id, window_id
+            return user_id, thread_id, chat_id, bound_wid
+    # Second pass: bare window ID fallback (only for local session windows)
+    if bare_id != qualified_id and _is_local_qualified(qualified_id):
+        for user_id, thread_id, bound_wid in thread_router.iter_thread_bindings():
+            if bound_wid == bare_id:
+                chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+                return user_id, thread_id, chat_id, bound_wid
     return None
 
 
 def _display_name(qualified_id: str) -> str:
     """Get display name for a qualified window ID."""
-    window_id = _extract_window_id(qualified_id)
-    return thread_router.get_display_name(window_id)
+    # Try full qualified ID first (foreign windows store names under qualified IDs)
+    name = thread_router.get_display_name(qualified_id)
+    if name != qualified_id:
+        return name
+    bare_id = _extract_window_id(qualified_id)
+    if bare_id == qualified_id:
+        return qualified_id
+    # Only fall back to bare ID for local windows — foreign windows
+    # must not pick up a local window's display name that shares the same bare @N
+    if not _is_local_qualified(qualified_id):
+        return qualified_id
+    return thread_router.get_display_name(bare_id)
 
 
 def _format_subject(subject: str) -> str:

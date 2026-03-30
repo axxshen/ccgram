@@ -5,11 +5,11 @@ from unittest.mock import patch
 import pytest
 
 from ccgram.msg_discovery import (
+    WindowInfo,
     clear_declared,
     list_peers,
     register_declared,
 )
-from ccgram.session import WindowState
 
 
 @pytest.fixture()
@@ -22,12 +22,12 @@ class TestListPeers:
         self, tmp_path: Path, declared_path: Path
     ) -> None:
         window_states = {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd="/home/user/payment-svc",
                 window_name="payment-svc",
                 provider_name="claude",
             ),
-            "@5": WindowState(
+            "@5": WindowInfo(
                 cwd="/home/user/api-gw",
                 window_name="api-gw",
                 provider_name="codex",
@@ -46,7 +46,7 @@ class TestListPeers:
         self, tmp_path: Path, declared_path: Path
     ) -> None:
         window_states = {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd="/proj",
                 window_name="proj",
                 provider_name="claude",
@@ -63,7 +63,7 @@ class TestListPeers:
 
     def test_merges_declared_overlay(self, tmp_path: Path, declared_path: Path) -> None:
         window_states = {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd="/proj",
                 window_name="proj",
                 provider_name="claude",
@@ -90,7 +90,7 @@ class TestListPeers:
 
     def test_external_windows_use_qualified_id(self, declared_path: Path) -> None:
         window_states = {
-            "emdash-claude-main-abc:@0": WindowState(
+            "emdash-claude-main-abc:@0": WindowInfo(
                 cwd="/proj",
                 window_name="proj",
                 provider_name="claude",
@@ -107,19 +107,19 @@ class TestListPeers:
 
 class TestFiltering:
     @pytest.fixture()
-    def window_states(self) -> dict[str, WindowState]:
+    def window_states(self) -> dict[str, WindowInfo]:
         return {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd="/home/user/payment-svc",
                 window_name="payment-svc",
                 provider_name="claude",
             ),
-            "@5": WindowState(
+            "@5": WindowInfo(
                 cwd="/home/user/api-gw",
                 window_name="api-gw",
                 provider_name="codex",
             ),
-            "@8": WindowState(
+            "@8": WindowInfo(
                 cwd="/home/user/dashboard",
                 window_name="dashboard",
                 provider_name="gemini",
@@ -127,7 +127,7 @@ class TestFiltering:
         }
 
     def test_filter_by_provider(
-        self, window_states: dict[str, WindowState], declared_path: Path
+        self, window_states: dict[str, WindowInfo], declared_path: Path
     ) -> None:
         peers = list_peers(
             window_states=window_states,
@@ -139,7 +139,7 @@ class TestFiltering:
         assert peers[0].provider == "claude"
 
     def test_filter_by_team(
-        self, window_states: dict[str, WindowState], declared_path: Path
+        self, window_states: dict[str, WindowInfo], declared_path: Path
     ) -> None:
         register_declared("ccgram:@0", team="backend", path=declared_path)
         register_declared("ccgram:@5", team="backend", path=declared_path)
@@ -156,7 +156,7 @@ class TestFiltering:
         assert ids == {"ccgram:@0", "ccgram:@5"}
 
     def test_filter_by_cwd_glob(
-        self, window_states: dict[str, WindowState], declared_path: Path
+        self, window_states: dict[str, WindowInfo], declared_path: Path
     ) -> None:
         peers = list_peers(
             window_states=window_states,
@@ -168,7 +168,7 @@ class TestFiltering:
         assert peers[0].name == "api-gw"
 
     def test_combined_filters(
-        self, window_states: dict[str, WindowState], declared_path: Path
+        self, window_states: dict[str, WindowInfo], declared_path: Path
     ) -> None:
         register_declared("ccgram:@0", team="backend", path=declared_path)
         register_declared("ccgram:@5", team="backend", path=declared_path)
@@ -184,7 +184,7 @@ class TestFiltering:
         assert peers[0].window_id == "ccgram:@5"
 
     def test_no_match_returns_empty(
-        self, window_states: dict[str, WindowState], declared_path: Path
+        self, window_states: dict[str, WindowInfo], declared_path: Path
     ) -> None:
         peers = list_peers(
             window_states=window_states,
@@ -243,7 +243,7 @@ class TestBranchDetection:
         self, tmp_path: Path, declared_path: Path
     ) -> None:
         window_states = {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd=str(tmp_path),
                 window_name="proj",
                 provider_name="claude",
@@ -264,7 +264,7 @@ class TestBranchDetection:
         self, tmp_path: Path, declared_path: Path
     ) -> None:
         window_states = {
-            "@0": WindowState(
+            "@0": WindowInfo(
                 cwd=str(tmp_path),
                 window_name="proj",
                 provider_name="claude",
