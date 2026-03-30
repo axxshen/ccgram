@@ -160,7 +160,7 @@ class TestApprovalFlow:
             patch(
                 "ccgram.handlers.msg_spawn._create_topic_for_spawn",
                 new_callable=AsyncMock,
-            ),
+            ) as mock_topic,
         ):
             mock_sm.window_states = {}
             mock_sm.get_window_state.return_value = MagicMock(cwd="", provider_name="")
@@ -169,6 +169,7 @@ class TestApprovalFlow:
         assert result is not None
         assert result.window_id == "@7"
         mock_tmux.create_window.assert_called_once()
+        mock_topic.assert_called_once()
 
     async def test_approve_unknown_request_returns_none(self, mock_bot):
         result = await handle_spawn_approval("nonexistent-id", mock_bot)

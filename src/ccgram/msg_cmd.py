@@ -258,18 +258,29 @@ def send_cmd(
         sys.exit(1)
 
     if wait_reply:
+        wait_file = _get_mailbox_dir() / f".waiting-{my_id.replace(':', '-')}"
+        if wait_file.exists():
+            click.echo(
+                "Error: already waiting for a reply (one outstanding --wait per window)",
+                err=True,
+            )
+            sys.exit(1)
         timeout = _get_wait_timeout()
         deadline = time.monotonic() + timeout
         click.echo(f"Sent {msg.id}, waiting for reply (timeout: {timeout}s)...")
-        while time.monotonic() < deadline:
-            messages = mailbox.inbox(my_id)
-            for m in messages:
-                if m.reply_to == msg.id:
-                    click.echo(f"Reply from {m.from_id}: {m.body}")
-                    sys.exit(0)
-            time.sleep(1)
-        click.echo("Error: wait timeout — no reply received", err=True)
-        sys.exit(1)
+        wait_file.write_text(msg.id)
+        try:
+            while time.monotonic() < deadline:
+                messages = mailbox.inbox(my_id)
+                for m in messages:
+                    if m.reply_to == msg.id:
+                        click.echo(f"Reply from {m.from_id}: {m.body}")
+                        sys.exit(0)
+                time.sleep(1)
+            click.echo("Error: wait timeout — no reply received", err=True)
+            sys.exit(1)
+        finally:
+            wait_file.unlink(missing_ok=True)
     else:
         click.echo(f"Sent {msg.id}")
 

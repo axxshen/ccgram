@@ -258,6 +258,15 @@ class TestSend:
         assert result.exit_code != 0
         assert "timeout" in result.output
 
+    def test_send_wait_deadlock_prevention(
+        self, runner: CliRunner, mailbox_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        wait_file = mailbox_dir / ".waiting-ccgram-@0"
+        wait_file.write_text("some-msg-id")
+        result = runner.invoke(cli, ["msg", "send", "ccgram:@5", "question", "--wait"])
+        assert result.exit_code != 0
+        assert "already waiting" in result.output
+
 
 class TestInbox:
     def test_empty_inbox(self, runner: CliRunner):

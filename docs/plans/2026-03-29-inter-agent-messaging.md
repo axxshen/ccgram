@@ -470,22 +470,22 @@ Ensure agents can identify their own window ID for CLI operations.
 
 ### Task 11: Verify acceptance criteria
 
-- [ ] verify all message types work end-to-end: request, reply, notify, broadcast
-- [ ] verify broker delivery works: message sent → idle detected → injected via send_keys → reply captured
-- [ ] verify shell safety: messages to shell windows stay in mailbox, shown in Telegram topic
-- [ ] verify deadlock prevention: `--wait` with existing pending outbound fails immediately
-- [ ] verify TTL expiration: expired messages not shown in inbox, swept by periodic cleanup
-- [ ] verify spawn approval flow: request → Telegram keyboard → approve → auto-topic created → window created
-- [ ] verify Telegram visibility: messages appear in both topics, silent, grouped
-- [ ] verify crash recovery: simulate unclean shutdown, restart, pending messages re-injected
-- [ ] verify ID migration: simulate tmux restart (window IDs change), mailbox dirs renamed correctly
-- [ ] verify dead window cleanup: kill a window, verify mailbox dir pruned on next poll cycle
-- [ ] verify concurrent sweep safety: no crashes when sweep runs during inbox read (FileNotFoundError handled)
-- [ ] verify foreign window respect: emdash window mailboxes not swept or pruned
-- [ ] verify discovery fluency: `list-peers` shows accurate data from SessionManager, not stale file
-- [ ] verify rate limiting: exceeding message or spawn rate returns error
-- [ ] verify registry auto-population: window state reflected without manual registration
-- [ ] run full test suite: `make fmt && make test && make lint && make typecheck`
+- [x] verify all message types work end-to-end: request, reply, notify, broadcast
+- [x] verify broker delivery works: message sent → idle detected → injected via send_keys → reply captured
+- [x] verify shell safety: messages to shell windows stay in mailbox, shown in Telegram topic
+- [x] verify deadlock prevention: `--wait` with existing pending outbound fails immediately
+- [x] verify TTL expiration: expired messages not shown in inbox, swept by periodic cleanup
+- [x] verify spawn approval flow: request → Telegram keyboard → approve → auto-topic created → window created
+- [x] verify Telegram visibility: messages appear in both topics, silent, grouped
+- [x] verify crash recovery: simulate unclean shutdown, restart, pending messages re-injected
+- [x] verify ID migration: simulate tmux restart (window IDs change), mailbox dirs renamed correctly
+- [x] verify dead window cleanup: kill a window, verify mailbox dir pruned on next poll cycle
+- [x] verify concurrent sweep safety: no crashes when sweep runs during inbox read (FileNotFoundError handled)
+- [x] verify foreign window respect: emdash window mailboxes not swept or pruned
+- [x] verify discovery fluency: `list-peers` shows accurate data from SessionManager, not stale file
+- [x] verify rate limiting: exceeding message or spawn rate returns error
+- [x] verify registry auto-population: window state reflected without manual registration
+- [x] run full test suite: `make fmt && make test && make lint && make typecheck`
 
 ### Task 12: Update documentation
 
