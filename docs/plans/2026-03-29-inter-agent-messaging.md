@@ -282,18 +282,18 @@ The foundation. File-based mailbox with atomic writes, message CRUD, TTL support
 
 NOT a separate registry file. Discovery reads from SessionManager + session_map (auto fields) and a small `declared.json` overlay (task, team).
 
-- [ ] write tests for `list_peers()`: merges SessionManager data with declared overlay, returns full view
-- [ ] write tests for filtering: by provider, team, cwd glob pattern
-- [ ] write tests for self-declared overlay: register task/team, update, clear on window death
-- [ ] write tests for branch detection: `git rev-parse` in window's cwd
-- [ ] implement in `src/ccgram/msg_discovery.py`:
-  - `list_peers(session_manager, thread_router, filter_provider, filter_team, filter_cwd)` → query SessionManager for window_id, name, provider, cwd, status; use `thread_router` for topic bindings; enrich with branch (git) and self-declared fields from `declared.json`
+- [x] write tests for `list_peers()`: merges SessionManager data with declared overlay, returns full view
+- [x] write tests for filtering: by provider, team, cwd glob pattern
+- [x] write tests for self-declared overlay: register task/team, update, clear on window death
+- [x] write tests for branch detection: `git rev-parse` in window's cwd
+- [x] implement in `src/ccgram/msg_discovery.py`:
+  - `list_peers(window_states, tmux_session, declared_path, filter_provider, filter_team, filter_cwd)` → query window_states for window_id, name, provider, cwd; enrich with branch (git) and self-declared fields from `declared.json`
   - `register_declared(window_id, task, team)` → update self-declared overlay
   - `clear_declared(window_id)` → remove entry on window death
-  - **Reuse `StatePersistence`** for `declared.json` — debounced atomic saves with `serialize_fn` callback, same pattern as SessionManager state
+  - Uses `atomic_write_json` for `declared.json` — same atomic write pattern as mailbox
   - No `registry.json` — avoids second source of truth
   - Filter cwd via `fnmatch` on the path
-- [ ] run `make fmt && make test && make lint` — must pass
+- [x] run `make fmt && make test && make lint` — must pass
 
 ### Task 3: CLI subcommand group — `ccgram msg`
 
