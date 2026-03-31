@@ -56,11 +56,11 @@ from .message_queue import (
 )
 from .message_sender import rate_limit_send_message
 from .polling_strategies import (
-    _ACTIVITY_THRESHOLD,
-    _MAX_PROBE_FAILURES,
-    _PANE_COUNT_TTL,
-    _STARTUP_TIMEOUT,
-    _TYPING_INTERVAL,
+    ACTIVITY_THRESHOLD,
+    MAX_PROBE_FAILURES,
+    PANE_COUNT_TTL,
+    STARTUP_TIMEOUT,
+    TYPING_INTERVAL,
     TopicPollState,
     WindowPollState,
     clear_window_poll_state,
@@ -117,7 +117,7 @@ async def _send_typing_throttled(bot: Bot, user_id: int, thread_id: int | None) 
         return
     ts = _get_topic_state(user_id, thread_id)
     now = time.monotonic()
-    if now - (ts.last_typing_sent or 0.0) < _TYPING_INTERVAL:
+    if now - (ts.last_typing_sent or 0.0) < TYPING_INTERVAL:
         return
     ts.last_typing_sent = now
     chat_id = thread_router.resolve_chat_id(user_id, thread_id)
@@ -160,10 +160,8 @@ def _check_transcript_activity(window_id: str, now: float) -> bool:
     if not mon:
         return False
     last_activity = mon.get_last_activity(session_id)
-    if last_activity and (now - last_activity) < _ACTIVITY_THRESHOLD:
-        ws = _get_window_state(window_id)
-        ws.has_seen_status = True
-        ws.startup_time = None
+    if last_activity and (now - last_activity) < ACTIVITY_THRESHOLD:
+        terminal_strategy.mark_seen_status(window_id)
         return True
     return False
 
@@ -229,7 +227,7 @@ async def _handle_no_status(
         raw_provider = getattr(state, "provider_name", "")
         provider_name = raw_provider.lower() if isinstance(raw_provider, str) else ""
         if provider_name in ("codex", "gemini", "shell"):
-            ws.has_seen_status = True
+            terminal_strategy.mark_seen_status(window_id)
             await _transition_to_idle(
                 bot, user_id, window_id, thread_id, chat_id, display, notif_mode
             )
@@ -248,8 +246,8 @@ async def _handle_no_status(
         await _send_typing_throttled(bot, user_id, thread_id)
         await update_topic_emoji(bot, chat_id, thread_id, "active", display)
         lifecycle_strategy.clear_autoclose_timer(user_id, thread_id)
-    elif now - ws.startup_time >= _STARTUP_TIMEOUT:
-        ws.has_seen_status = True
+    elif now - ws.startup_time >= STARTUP_TIMEOUT:
+        terminal_strategy.mark_seen_status(window_id)
         await _transition_to_idle(
             bot, user_id, window_id, thread_id, chat_id, display, notif_mode
         )
@@ -276,7 +274,7 @@ async def _scan_window_panes(
         return  # Cached single-pane — no subprocess needed
 
     panes = await tmux_manager.list_panes(window_id)
-    ws.pane_count_cache = (len(panes), now + _PANE_COUNT_TTL)
+    ws.pane_count_cache = (len(panes), now + PANE_COUNT_TTL)
     live_pane_ids = {p.pane_id for p in panes}
 
     interactive_strategy.prune_stale_pane_alerts(window_id, live_pane_ids)
@@ -518,7 +516,7 @@ async def _handle_dead_window_notification(
     """Send proactive recovery notification for a dead window (once per death)."""
     if lifecycle_strategy.is_dead_notified(user_id, thread_id, wid):
         return
-    terminal_strategy.get_state(wid).has_seen_status = False
+    terminal_strategy.clear_seen_status(wid)
 
     clear_tool_msg_ids_for_topic(user_id, thread_id)
     chat_id = thread_router.resolve_chat_id(user_id, thread_id)
@@ -561,7 +559,7 @@ async def _handle_dead_window_notification(
                 "thread not found" in probe_err.message.lower()
                 or "topic_id_invalid" in probe_err.message.lower()
             ):
-                terminal_strategy.get_state(wid).probe_failures = 0
+                terminal_strategy.reset_probe_failures(wid)
                 await clear_topic_state(user_id, thread_id, bot, window_id=wid)
                 thread_router.unbind_thread(user_id, thread_id)
                 logger.info(
@@ -653,7 +651,7 @@ async def _check_unbound_window_ttl(live_windows: list | None = None) -> None:
         if w.window_id not in bound_ids and not is_foreign_window(w.window_id):
             ws = terminal_strategy.get_state(w.window_id)
             if ws.unbound_timer is None:
-                ws.unbound_timer = now
+                terminal_strategy.set_unbound_timer(w.window_id, now)
 
     await _kill_expired_unbound(now, timeout)
     _prune_orphaned_poll_state(live_ids, bound_ids)
@@ -694,14 +692,14 @@ async def _prune_stale_state(live_windows: list) -> None:
 async def _probe_topic_existence(bot: Bot) -> None:
     """Probe all bound topics via Telegram API; detect deleted topics."""
     for user_id, thread_id, wid in list(thread_router.iter_thread_bindings()):
-        if terminal_strategy.get_state(wid).probe_failures >= _MAX_PROBE_FAILURES:
+        if terminal_strategy.get_state(wid).probe_failures >= MAX_PROBE_FAILURES:
             continue
         try:
             await bot.unpin_all_forum_topic_messages(
                 chat_id=thread_router.resolve_chat_id(user_id, thread_id),
                 message_thread_id=thread_id,
             )
-            terminal_strategy.get_state(wid).probe_failures = 0
+            terminal_strategy.reset_probe_failures(wid)
         except TelegramError as e:
             if isinstance(e, BadRequest) and (
                 "Topic_id_invalid" in e.message
@@ -710,7 +708,7 @@ async def _probe_topic_existence(bot: Bot) -> None:
                 w = await tmux_manager.find_window_by_id(wid)
                 if w:
                     await tmux_manager.kill_window(w.window_id)
-                terminal_strategy.get_state(wid).probe_failures = 0
+                terminal_strategy.reset_probe_failures(wid)
                 await clear_topic_state(user_id, thread_id, bot, window_id=wid)
                 thread_router.unbind_thread(user_id, thread_id)
                 logger.info(
@@ -722,7 +720,7 @@ async def _probe_topic_existence(bot: Bot) -> None:
                 )
             else:
                 count = lifecycle_strategy.record_probe_failure(wid)
-                if count < _MAX_PROBE_FAILURES:
+                if count < MAX_PROBE_FAILURES:
                     log_throttled(
                         logger,
                         f"topic-probe:{wid}",
@@ -795,9 +793,7 @@ async def update_status_message(
     notif_mode = session_manager.get_notification_mode(window_id)
 
     if status_line:
-        ws = _get_window_state(window_id)
-        ws.has_seen_status = True
-        ws.startup_time = None
+        terminal_strategy.mark_seen_status(window_id)
         await _send_typing_throttled(bot, user_id, thread_id)
         if notif_mode not in ("muted", "errors_only"):
             from .hook_events import build_subagent_label, get_subagent_names

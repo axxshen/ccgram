@@ -27,22 +27,28 @@ logger = structlog.get_logger()
 # ── Constants ───────────────────────────────────────────────────────────
 
 # Transcript activity heuristic threshold (seconds).
-_ACTIVITY_THRESHOLD = 10.0
+ACTIVITY_THRESHOLD = 10.0
+_ACTIVITY_THRESHOLD = ACTIVITY_THRESHOLD
 
 # Startup timeout before transitioning to idle (seconds).
-_STARTUP_TIMEOUT = 30.0
+STARTUP_TIMEOUT = 30.0
+_STARTUP_TIMEOUT = STARTUP_TIMEOUT
 
 # RC debounce: require RC absent for this long before clearing badge.
-_RC_DEBOUNCE_SECONDS = 3.0
+RC_DEBOUNCE_SECONDS = 3.0
+_RC_DEBOUNCE_SECONDS = RC_DEBOUNCE_SECONDS
 
 # Consecutive topic probe failure threshold.
-_MAX_PROBE_FAILURES = 3
+MAX_PROBE_FAILURES = 3
+_MAX_PROBE_FAILURES = MAX_PROBE_FAILURES
 
 # Typing indicator throttle interval (seconds).
-_TYPING_INTERVAL = 4.0
+TYPING_INTERVAL = 4.0
+_TYPING_INTERVAL = TYPING_INTERVAL
 
 # Pane count cache TTL for multi-pane scanning (seconds).
-_PANE_COUNT_TTL = 5.0
+PANE_COUNT_TTL = 5.0
+_PANE_COUNT_TTL = PANE_COUNT_TTL
 
 # Shell commands indicating agent has exited.
 SHELL_COMMANDS = frozenset({"bash", "zsh", "fish", "sh", "dash", "tcsh", "csh", "ksh"})
@@ -177,9 +183,55 @@ class TerminalStatusStrategy:
             now = time.monotonic()
             if ws.rc_off_since is None:
                 ws.rc_off_since = now
-            elif now - ws.rc_off_since >= _RC_DEBOUNCE_SECONDS:
+            elif now - ws.rc_off_since >= RC_DEBOUNCE_SECONDS:
                 ws.rc_active = False
                 ws.rc_off_since = None
+
+    def reset_probe_failures(self, window_id: str) -> None:
+        """Reset probe failure counter for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.probe_failures = 0
+
+    def clear_seen_status(self, window_id: str) -> None:
+        """Clear startup status tracking for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.has_seen_status = False
+            ws.startup_time = None
+
+    def set_unbound_timer(self, window_id: str, ts: float) -> None:
+        """Set unbound timer for a window (creates state if needed)."""
+        ws = self.get_state(window_id)
+        ws.unbound_timer = ts
+
+    def clear_unbound_timer(self, window_id: str) -> None:
+        """Clear unbound timer for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.unbound_timer = None
+
+    def reset_all_probe_failures(self) -> None:
+        """Reset probe failure counters for all windows."""
+        for ws in self._states.values():
+            ws.probe_failures = 0
+
+    def reset_all_seen_status(self) -> None:
+        """Reset startup status tracking for all windows."""
+        for ws in self._states.values():
+            ws.has_seen_status = False
+            ws.startup_time = None
+
+    def reset_all_unbound_timers(self) -> None:
+        """Reset unbound timers for all windows."""
+        for ws in self._states.values():
+            ws.unbound_timer = None
+
+    def mark_seen_status(self, window_id: str) -> None:
+        """Mark a window as having seen its first status update."""
+        ws = self.get_state(window_id)
+        ws.has_seen_status = True
+        ws.startup_time = None
 
     def get_screen_buffer(
         self, window_id: str, columns: int, rows: int
@@ -378,8 +430,7 @@ class TopicLifecycleStrategy:
         """Reset all autoclose tracking (for testing)."""
         for ts in self._states.values():
             ts.autoclose = None
-        for ws in self._terminal._states.values():
-            ws.unbound_timer = None
+        self._terminal.reset_all_unbound_timers()
 
     def clear_dead_notification(self, user_id: int, thread_id: int) -> None:
         """Remove dead notification tracking for a topic."""
@@ -393,14 +444,11 @@ class TopicLifecycleStrategy:
 
     def clear_probe_failures(self, window_id: str) -> None:
         """Reset probe failure counter for a window."""
-        ws = self._terminal._states.get(window_id)
-        if ws:
-            ws.probe_failures = 0
+        self._terminal.reset_probe_failures(window_id)
 
     def reset_probe_failures_state(self) -> None:
         """Reset all probe failure tracking (for testing)."""
-        for ws in self._terminal._states.values():
-            ws.probe_failures = 0
+        self._terminal.reset_all_probe_failures()
 
     def clear_typing_state(self, user_id: int, thread_id: int) -> None:
         """Clear typing indicator throttle for a topic."""
@@ -415,23 +463,18 @@ class TopicLifecycleStrategy:
 
     def clear_seen_status(self, window_id: str) -> None:
         """Clear startup status tracking for a window."""
-        ws = self._terminal._states.get(window_id)
-        if ws:
-            ws.has_seen_status = False
-            ws.startup_time = None
+        self._terminal.clear_seen_status(window_id)
 
     def reset_seen_status_state(self) -> None:
         """Reset all startup status tracking (for testing)."""
-        for ws in self._terminal._states.values():
-            ws.has_seen_status = False
-            ws.startup_time = None
+        self._terminal.reset_all_seen_status()
 
     def record_probe_failure(self, window_id: str) -> int:
         """Increment probe failure counter; log once when threshold is reached."""
         ws = self._terminal.get_state(window_id)
         ws.probe_failures += 1
         count = ws.probe_failures
-        if count == _MAX_PROBE_FAILURES:
+        if count == MAX_PROBE_FAILURES:
             logger.info(
                 "Suspending topic probe for %s after %d consecutive failures",
                 window_id,

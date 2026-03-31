@@ -177,7 +177,7 @@ Design doc: `docs/design/polling-subsystem/design.md`
 
 `TopicLifecycleStrategy` directly accesses `self._terminal._states` (private dict) in 5 methods. `polling_coordinator.py` imports 5 private `_UPPERCASE` constants.
 
-- [ ] `handlers/polling_strategies.py` — add to `TerminalStatusStrategy`:
+- [x] `handlers/polling_strategies.py` — add to `TerminalStatusStrategy`:
 
   ```python
   def reset_probe_failures(self, window_id: str) -> None:
@@ -206,25 +206,25 @@ Design doc: `docs/design/polling-subsystem/design.md`
       for ws in self._states.values(): ws.unbound_timer = None
   ```
 
-- [ ] `handlers/polling_strategies.py` — update `TopicLifecycleStrategy` to use public methods:
+- [x] `handlers/polling_strategies.py` — update `TopicLifecycleStrategy` to use public methods:
   - line 381 `reset_autoclose_state`: replace `for ws in self._terminal._states.values()` → `self._terminal.reset_all_unbound_timers()`
   - line 395 `clear_probe_failures`: replace `ws = self._terminal._states.get(window_id)` → `self._terminal.reset_probe_failures(window_id)`
   - line 400 `reset_probe_failures_state`: replace direct iteration → `self._terminal.reset_all_probe_failures()`
   - line 417 `clear_seen_status`: replace direct access → `self._terminal.clear_seen_status(window_id)`
   - line 423 `reset_seen_status_state`: replace iteration → `self._terminal.reset_all_seen_status()`
 
-- [ ] `handlers/polling_strategies.py`: promote 5 private constants to public (keep private aliases):
+- [x] `handlers/polling_strategies.py`: promote 5 private constants to public (keep private aliases):
   - `_ACTIVITY_THRESHOLD` → `ACTIVITY_THRESHOLD`
   - `_MAX_PROBE_FAILURES` → `MAX_PROBE_FAILURES`
   - `_PANE_COUNT_TTL` → `PANE_COUNT_TTL`
   - `_STARTUP_TIMEOUT` → `STARTUP_TIMEOUT`
   - `_TYPING_INTERVAL` → `TYPING_INTERVAL`
 
-- [ ] `handlers/polling_coordinator.py` (lines 59-63): update imports to use public constant names
-- [ ] `handlers/polling_coordinator.py`: replace ~12 direct `WindowPollState` field assignments with strategy method calls — search for `.probe_failures`, `.has_seen_status`, `.startup_time`, `.unbound_timer` assignments
-- [ ] `tests/ccgram/handlers/test_polling_strategies.py`: update private constant import if present (line 15: `_MAX_PROBE_FAILURES` → `MAX_PROBE_FAILURES`)
-- [ ] write tests for new `TerminalStatusStrategy` methods: `test_reset_probe_failures`, `test_clear_seen_status`, `test_set_clear_unbound_timer`
-- [ ] `make check` — must pass
+- [x] `handlers/polling_coordinator.py` (lines 59-63): update imports to use public constant names
+- [x] `handlers/polling_coordinator.py`: replace ~12 direct `WindowPollState` field assignments with strategy method calls — search for `.probe_failures`, `.has_seen_status`, `.startup_time`, `.unbound_timer` assignments
+- [x] `tests/ccgram/handlers/test_polling_strategies.py`: update private constant import if present (line 15: `_MAX_PROBE_FAILURES` → `MAX_PROBE_FAILURES`)
+- [x] write tests for new `TerminalStatusStrategy` methods: `test_reset_probe_failures`, `test_clear_seen_status`, `test_set_clear_unbound_timer`
+- [x] `make check` — must pass
 
 **Note**: `test_status_polling.py` and `test_polling_coordinator.py` use `terminal_strategy._states` directly in fixtures. This is acceptable — the `_states` dict remains accessible; the encapsulation adds public mutation methods but does not hide the dict.
 

@@ -8,12 +8,12 @@ import pytest
 
 from ccgram.handlers.polling_strategies import (
     InteractiveUIStrategy,
+    MAX_PROBE_FAILURES,
+    RC_DEBOUNCE_SECONDS,
     TerminalStatusStrategy,
     TopicLifecycleStrategy,
     TopicPollState,
     WindowPollState,
-    _MAX_PROBE_FAILURES,
-    _RC_DEBOUNCE_SECONDS,
     is_shell_prompt,
 )
 
@@ -79,7 +79,7 @@ class TestTerminalStatusStrategy:
 
     def test_update_rc_state_debounce_completes(self):
         ws = WindowPollState(rc_active=True)
-        ws.rc_off_since = time.monotonic() - _RC_DEBOUNCE_SECONDS - 1
+        ws.rc_off_since = time.monotonic() - RC_DEBOUNCE_SECONDS - 1
         self.strategy.update_rc_state(ws, False)
         assert not ws.rc_active
         assert ws.rc_off_since is None
@@ -114,6 +114,82 @@ class TestTerminalStatusStrategy:
             ):
                 self.strategy.parse_with_pyte("@0", "text", 0, 0)
                 mock_buf.assert_called_with("@0", 200, 50)
+
+
+class TestTerminalStatusStrategyPublicMethods:
+    def setup_method(self):
+        self.strategy = TerminalStatusStrategy()
+
+    def test_reset_probe_failures(self):
+        ws = self.strategy.get_state("@0")
+        ws.probe_failures = 5
+        self.strategy.reset_probe_failures("@0")
+        assert ws.probe_failures == 0
+
+    def test_reset_probe_failures_nonexistent_is_noop(self):
+        self.strategy.reset_probe_failures("@999")
+
+    def test_clear_seen_status(self):
+        ws = self.strategy.get_state("@0")
+        ws.has_seen_status = True
+        ws.startup_time = 123.0
+        self.strategy.clear_seen_status("@0")
+        assert not ws.has_seen_status
+        assert ws.startup_time is None
+
+    def test_clear_seen_status_nonexistent_is_noop(self):
+        self.strategy.clear_seen_status("@999")
+
+    def test_set_unbound_timer(self):
+        self.strategy.set_unbound_timer("@0", 42.0)
+        ws = self.strategy.get_state("@0")
+        assert ws.unbound_timer == 42.0
+
+    def test_clear_unbound_timer(self):
+        ws = self.strategy.get_state("@0")
+        ws.unbound_timer = 42.0
+        self.strategy.clear_unbound_timer("@0")
+        assert ws.unbound_timer is None
+
+    def test_clear_unbound_timer_nonexistent_is_noop(self):
+        self.strategy.clear_unbound_timer("@999")
+
+    def test_reset_all_probe_failures(self):
+        self.strategy.get_state("@0").probe_failures = 3
+        self.strategy.get_state("@1").probe_failures = 7
+        self.strategy.reset_all_probe_failures()
+        assert self.strategy.get_state("@0").probe_failures == 0
+        assert self.strategy.get_state("@1").probe_failures == 0
+
+    def test_reset_all_seen_status(self):
+        self.strategy.get_state("@0").has_seen_status = True
+        self.strategy.get_state("@0").startup_time = 1.0
+        self.strategy.get_state("@1").has_seen_status = True
+        self.strategy.reset_all_seen_status()
+        assert not self.strategy.get_state("@0").has_seen_status
+        assert self.strategy.get_state("@0").startup_time is None
+        assert not self.strategy.get_state("@1").has_seen_status
+
+    def test_reset_all_unbound_timers(self):
+        self.strategy.get_state("@0").unbound_timer = 1.0
+        self.strategy.get_state("@1").unbound_timer = 2.0
+        self.strategy.reset_all_unbound_timers()
+        assert self.strategy.get_state("@0").unbound_timer is None
+        assert self.strategy.get_state("@1").unbound_timer is None
+
+    def test_mark_seen_status(self):
+        ws = self.strategy.get_state("@0")
+        ws.startup_time = 123.0
+        assert not ws.has_seen_status
+        self.strategy.mark_seen_status("@0")
+        assert ws.has_seen_status
+        assert ws.startup_time is None
+
+    def test_mark_seen_status_creates_state(self):
+        self.strategy.mark_seen_status("@new")
+        ws = self.strategy.get_state("@new")
+        assert ws.has_seen_status
+        assert ws.startup_time is None
 
 
 class TestInteractiveUIStrategy:
@@ -209,7 +285,7 @@ class TestTopicLifecycleStrategy:
         assert count == 2
 
     def test_record_probe_failure_logs_at_threshold(self):
-        for _ in range(_MAX_PROBE_FAILURES - 1):
+        for _ in range(MAX_PROBE_FAILURES - 1):
             self.strategy.record_probe_failure("@0")
         with patch("ccgram.handlers.polling_strategies.logger") as mock_logger:
             self.strategy.record_probe_failure("@0")
