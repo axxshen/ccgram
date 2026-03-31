@@ -346,7 +346,7 @@ async def _notify_shell_pending(
 
 async def _process_spawn_requests(bot: "Bot") -> None:
     """Scan for file-based spawn requests and post approval keyboards or auto-approve."""
-    from ..spawn_request import pop_pending, scan_spawn_requests, spawns_dir
+    from ..spawn_request import pop_pending, scan_spawn_requests
     from .msg_spawn import (
         handle_spawn_approval,
         post_spawn_approval_keyboard,
@@ -358,12 +358,9 @@ async def _process_spawn_requests(bot: "Bot") -> None:
     for req in new_requests:
         try:
             if req.auto or config.msg_auto_spawn:
-                result = await handle_spawn_approval(
+                await handle_spawn_approval(
                     req.id, bot, spawn_timeout=config.msg_spawn_timeout
                 )
-                if result is None:
-                    spawn_file = spawns_dir() / f"{req.id}.json"
-                    spawn_file.unlink(missing_ok=True)
             else:
                 posted = await post_spawn_approval_keyboard(
                     bot, req.requester_window, req
