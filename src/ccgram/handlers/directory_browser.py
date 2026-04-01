@@ -18,7 +18,8 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..config import config
-from ..session import parse_emdash_provider, session_manager
+from ..session import parse_emdash_provider
+from ..user_preferences import user_preferences
 from ..window_resolver import is_foreign_window
 from .callback_data import (
     CB_DIR_CANCEL,
@@ -168,9 +169,9 @@ def get_favorites(user_id: int | None) -> tuple[list[str], set[str]]:
     """
     if user_id is None:
         return [], set()
-    starred = session_manager.get_user_starred(user_id)
+    starred = user_preferences.get_user_starred(user_id)
     starred_set = set(starred)
-    mru = session_manager.get_user_mru(user_id)
+    mru = user_preferences.get_user_mru(user_id)
     seen: set[str] = set()
     result: list[str] = []
     for d in [*starred, *mru]:

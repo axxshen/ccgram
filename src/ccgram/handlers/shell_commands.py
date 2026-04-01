@@ -32,7 +32,7 @@ from ..llm import get_completer
 from ..llm import CommandResult
 from ..session import session_manager
 from ..thread_router import thread_router
-from ..tmux_manager import tmux_manager
+from ..tmux_manager import send_to_window, tmux_manager
 from .callback_data import (
     CB_SHELL_CANCEL,
     CB_SHELL_CONFIRM_DANGER,
@@ -44,6 +44,7 @@ from .callback_registry import register
 from .message_sender import safe_edit, safe_reply, safe_send
 from .message_queue import enqueue_status_update
 from .polling_strategies import clear_probe_failures
+from ..topic_state_registry import topic_state
 
 logger = structlog.get_logger()
 
@@ -102,6 +103,7 @@ def has_shell_pending(chat_id: int, thread_id: int) -> bool:
     return (chat_id, thread_id) in _shell_pending
 
 
+@topic_state.register("chat")
 def clear_shell_pending(chat_id: int, thread_id: int) -> None:
     """Clear any pending shell command for this topic (used by cleanup)."""
     _shell_pending.pop((chat_id, thread_id), None)
@@ -259,9 +261,7 @@ async def _execute_raw_command(
     """Send a raw command to the shell and start output capture."""
     await _cancel_stuck_input(window_id)
 
-    success, err_message = await session_manager.send_to_window(
-        window_id, command, raw=True
-    )
+    success, err_message = await send_to_window(window_id, command, raw=True)
     if not success:
         chat_id = thread_router.resolve_chat_id(user_id, thread_id)
         await safe_send(

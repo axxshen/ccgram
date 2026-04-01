@@ -5,6 +5,8 @@ import shutil
 
 import pytest
 
+from ccgram.thread_router import thread_router
+
 from ._helpers import (
     TEST_THREAD_ID,
     TEST_USER_ID,
@@ -91,7 +93,7 @@ async def test_recovery_fresh(e2e_app, work_dir):
     await app.process_update(u_fresh)
     await asyncio.sleep(5)
 
-    new_window_id = session_mgr.get_window_for_thread(TEST_USER_ID, TEST_THREAD_ID)
+    new_window_id = thread_router.get_window_for_thread(TEST_USER_ID, TEST_THREAD_ID)
     assert new_window_id is not None
     new_pane = await tmux.capture_pane(new_window_id)
     assert new_pane is not None

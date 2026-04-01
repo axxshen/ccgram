@@ -7,7 +7,7 @@ import pytest
 from telegram.error import RetryAfter, TelegramError
 
 from ccgram.handlers.topic_orchestration import (
-    _collect_target_chats,
+    collect_target_chats,
     _is_window_already_bound,
     _topic_create_retry_until,
     adopt_unbound_windows,
@@ -76,14 +76,14 @@ class TestCollectTargetChats:
                 (1, 100, "@0"),
             ]
             mock_router.resolve_chat_id.return_value = -1001
-            result = _collect_target_chats("@5")
+            result = collect_target_chats("@5")
             assert result == {-1001}
 
     def test_fallback_to_group_chat_ids(self):
         with patch("ccgram.handlers.topic_orchestration.thread_router") as mock_router:
             mock_router.iter_thread_bindings.return_value = []
             mock_router.group_chat_ids = {1: -2002}
-            result = _collect_target_chats("@5")
+            result = collect_target_chats("@5")
             assert result == {-2002}
 
     def test_fallback_to_config_group_id(self):
@@ -94,7 +94,7 @@ class TestCollectTargetChats:
             mock_router.iter_thread_bindings.return_value = []
             mock_router.group_chat_ids = {}
             mock_config.group_id = -3003
-            result = _collect_target_chats("@5")
+            result = collect_target_chats("@5")
             assert result == {-3003}
 
     def test_no_chats_available(self):
@@ -105,7 +105,7 @@ class TestCollectTargetChats:
             mock_router.iter_thread_bindings.return_value = []
             mock_router.group_chat_ids = {}
             mock_config.group_id = None
-            result = _collect_target_chats("@5")
+            result = collect_target_chats("@5")
             assert result == set()
 
     def test_skips_positive_ids(self):
@@ -116,7 +116,7 @@ class TestCollectTargetChats:
             mock_router.iter_thread_bindings.return_value = []
             mock_router.group_chat_ids = {"100:5": 100}
             mock_config.group_id = None
-            result = _collect_target_chats("@5")
+            result = collect_target_chats("@5")
             assert result == set()
 
 
@@ -152,7 +152,7 @@ class TestHandleNewWindow:
                 new_callable=AsyncMock,
             ),
             patch(
-                "ccgram.handlers.topic_orchestration._collect_target_chats",
+                "ccgram.handlers.topic_orchestration.collect_target_chats",
                 return_value={-1001},
             ),
             patch("ccgram.handlers.topic_orchestration.thread_router") as mock_router,
@@ -181,7 +181,7 @@ class TestHandleNewWindow:
                 new_callable=AsyncMock,
             ),
             patch(
-                "ccgram.handlers.topic_orchestration._collect_target_chats",
+                "ccgram.handlers.topic_orchestration.collect_target_chats",
                 return_value=set(),
             ),
         ):
@@ -206,7 +206,7 @@ class TestHandleNewWindow:
                 new_callable=AsyncMock,
             ),
             patch(
-                "ccgram.handlers.topic_orchestration._collect_target_chats",
+                "ccgram.handlers.topic_orchestration.collect_target_chats",
                 return_value={-1001},
             ),
         ):

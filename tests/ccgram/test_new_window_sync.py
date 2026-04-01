@@ -110,8 +110,8 @@ class TestNewWindowSyncWithBindings:
             chat_id=group_chat, name="new-project"
         )
 
-        assert sm.get_window_for_thread(user_id, new_thread) == new_window
-        assert sm.resolve_chat_id(user_id, new_thread) == group_chat
+        assert thread_router.get_window_for_thread(user_id, new_thread) == new_window
+        assert thread_router.resolve_chat_id(user_id, new_thread) == group_chat
         assert thread_router.window_display_names.get(new_window) == "new-project"
 
     async def test_multiple_groups_get_separate_topics(
@@ -211,8 +211,8 @@ class TestNewWindowSyncColdStart:
             await monitor._detect_and_cleanup_changes()
 
         bot.create_forum_topic.assert_called_once_with(chat_id=group_id, name="project")
-        assert sm.get_window_for_thread(user_id, new_thread) == new_window
-        assert sm.resolve_chat_id(user_id, new_thread) == group_id
+        assert thread_router.get_window_for_thread(user_id, new_thread) == new_window
+        assert thread_router.resolve_chat_id(user_id, new_thread) == group_id
 
     async def test_cold_start_without_group_id_skips(
         self, monitor: SessionMonitor, sm: SessionManager

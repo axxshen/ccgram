@@ -8,13 +8,12 @@ Responsibilities:
   - Persist/load state to ~/.ccgram/state.json.
   - Sync window↔session bindings from session_map.json (written by hook).
   - Resolve window IDs to ClaudeSession objects (JSONL file reading).
-  - Track per-user read offsets for unread-message detection.
   - Delegate thread↔window routing to ThreadRouter.
   - Send keystrokes to tmux windows and retrieve message history.
   - Re-resolve stale window IDs on startup (tmux server restart recovery).
 
 Key class: SessionManager (singleton instantiated as `session_manager`).
-Thread routing delegation: bind_thread, unbind_thread, get_window_for_thread, etc.
+Thread routing: delegated to ThreadRouter (see thread_router.py) — no pass-throughs.
 """
 
 import asyncio
@@ -22,29 +21,29 @@ import fcntl
 import json
 import structlog
 from dataclasses import dataclass, field
-from pathlib import Path
-from collections.abc import Iterator
-from typing import Any, Self
+from typing import Any
 
 import aiofiles
 
 from .config import config
-from .handlers.callback_data import NOTIFICATION_MODES
-from .providers import get_provider_for_window
+from .session_resolver import ClaudeSession
 from .state_persistence import StatePersistence
 from .tmux_manager import tmux_manager
 from .thread_router import thread_router
+from .user_preferences import user_preferences
 from .utils import atomic_write_json
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
+from .window_state_store import (
+    APPROVAL_MODES,
+    BATCH_MODES,
+    DEFAULT_APPROVAL_MODE,
+    DEFAULT_BATCH_MODE,
+    NOTIFICATION_MODES,
+    WindowState,
+    window_store,
+)
 
 logger = structlog.get_logger()
-
-APPROVAL_MODES: frozenset[str] = frozenset({"normal", "yolo"})
-DEFAULT_APPROVAL_MODE = "normal"
-YOLO_APPROVAL_MODE = "yolo"
-
-BATCH_MODES: frozenset[str] = frozenset({"batched", "verbose"})
-DEFAULT_BATCH_MODE = "batched"
 
 
 _LEGACY_SESSION_PREFIX = "ccbot:"
@@ -93,66 +92,6 @@ def parse_emdash_provider(session_name: str) -> str:
 
 
 @dataclass
-class WindowState:
-    """Persistent state for a tmux window.
-
-    Attributes:
-        session_id: Associated Claude session ID (empty if not yet detected)
-        cwd: Working directory for direct file path construction
-        window_name: Display name of the window
-        transcript_path: Direct path to JSONL transcript file (from hook payload)
-        notification_mode: "all" | "errors_only" | "muted"
-        approval_mode: "normal" | "yolo"
-        external: True for windows owned by external tools (emdash) — never killed by ccgram
-    """
-
-    session_id: str = ""
-    cwd: str = ""
-    window_name: str = ""
-    transcript_path: str = ""
-    notification_mode: str = "all"
-    provider_name: str = ""
-    approval_mode: str = DEFAULT_APPROVAL_MODE
-    batch_mode: str = DEFAULT_BATCH_MODE
-    external: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        d: dict[str, Any] = {
-            "session_id": self.session_id,
-            "cwd": self.cwd,
-        }
-        if self.window_name:
-            d["window_name"] = self.window_name
-        if self.transcript_path:
-            d["transcript_path"] = self.transcript_path
-        if self.notification_mode != "all":
-            d["notification_mode"] = self.notification_mode
-        if self.provider_name:
-            d["provider_name"] = self.provider_name
-        if self.approval_mode != DEFAULT_APPROVAL_MODE:
-            d["approval_mode"] = self.approval_mode
-        if self.batch_mode != DEFAULT_BATCH_MODE:
-            d["batch_mode"] = self.batch_mode
-        if self.external:
-            d["external"] = True
-        return d
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Self:
-        return cls(
-            session_id=data.get("session_id", ""),
-            cwd=data.get("cwd", ""),
-            window_name=data.get("window_name", ""),
-            transcript_path=data.get("transcript_path", ""),
-            notification_mode=data.get("notification_mode", "all"),
-            provider_name=data.get("provider_name", ""),
-            approval_mode=data.get("approval_mode", DEFAULT_APPROVAL_MODE),
-            batch_mode=data.get("batch_mode", DEFAULT_BATCH_MODE),
-            external=data.get("external", False),
-        )
-
-
-@dataclass
 class AuditIssue:
     """A single issue found during state audit."""
 
@@ -178,14 +117,38 @@ class AuditResult:
         return len(self.issues) > 0
 
 
-@dataclass
-class ClaudeSession:
-    """Information about a Claude Code session."""
+def _migrate_mailbox_ids(
+    old_display: dict[str, str],
+    new_states: dict[str, "WindowState"],
+    tmux_session: str,
+) -> None:
+    """Migrate mailbox directories when window IDs change after tmux restart.
 
-    session_id: str
-    summary: str
-    message_count: int
-    file_path: str
+    Builds a remap dict by matching old→new IDs via display name, then
+    renames mailbox directories to match.
+    """
+    # Build new key→display_name from current window_display_names
+    new_display = {
+        wid: thread_router.window_display_names.get(wid, "") for wid in new_states
+    }
+    # Invert new display → new_id
+    display_to_new: dict[str, str] = {}
+    for wid, name in new_display.items():
+        if name:
+            display_to_new[name] = wid
+
+    remap: dict[str, str] = {}
+    for old_id, name in old_display.items():
+        if not name or old_id in new_states:
+            continue
+        new_id = display_to_new.get(name)
+        if new_id and new_id != old_id:
+            remap[f"{tmux_session}:{old_id}"] = f"{tmux_session}:{new_id}"
+
+    if remap:
+        from .mailbox import Mailbox
+
+        Mailbox(config.mailbox_dir).migrate_ids(remap)
 
 
 @dataclass
@@ -199,16 +162,17 @@ class SessionManager:
     delegated to ThreadRouter — see thread_router.py.
 
     window_states: window_id -> WindowState (session_id, cwd, window_name)
-    user_window_offsets: user_id -> {window_id -> byte_offset}
-    """
 
-    window_states: dict[str, WindowState] = field(default_factory=dict)
-    user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
-    # User directory favorites: user_id -> {"starred": [...], "mru": [...]}
-    user_dir_favorites: dict[int, dict[str, list[str]]] = field(default_factory=dict)
+    User preferences (starred dirs, MRU, read offsets) are delegated to
+    UserPreferences — see user_preferences.py.
+    """
 
     # Delegated persistence (not serialized)
     _persistence: StatePersistence = field(default=None, repr=False, init=False)  # type: ignore[assignment]
+
+    @property
+    def window_states(self) -> dict[str, WindowState]:
+        return window_store.window_states
 
     # Backward-compat properties for routing data (owned by thread_router)
     @property
@@ -225,21 +189,17 @@ class SessionManager:
 
     def __post_init__(self) -> None:
         self._persistence = StatePersistence(config.state_file, self._serialize_state)
+        window_store._schedule_save = self._save_state
+        window_store._on_hookless_provider_switch = self._clear_session_map_entry
         thread_router._schedule_save = self._save_state
-        thread_router._has_window_state = lambda wid: wid in self.window_states
+        thread_router._has_window_state = lambda wid: wid in window_store.window_states
+        user_preferences._schedule_save = self._save_state
         self._load_state()
 
     def _serialize_state(self) -> dict[str, Any]:
         """Serialize all state to a dict for persistence."""
-        result = {
-            "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
-            "user_window_offsets": {
-                str(uid): offsets for uid, offsets in self.user_window_offsets.items()
-            },
-            "user_dir_favorites": {
-                str(uid): favs for uid, favs in self.user_dir_favorites.items()
-            },
-        }
+        result = {"window_states": window_store.to_dict()}
+        result.update(user_preferences.to_dict())
         result.update(thread_router.to_dict())
         return result
 
@@ -263,20 +223,12 @@ class SessionManager:
         """
         state = self._persistence.load()
         if not state:
-            self._needs_migration = False
             return
 
-        self.window_states = {
-            k: WindowState.from_dict(v)
-            for k, v in state.get("window_states", {}).items()
-        }
-        self.user_window_offsets = {
-            int(uid): offsets
-            for uid, offsets in state.get("user_window_offsets", {}).items()
-        }
-        self.user_dir_favorites = {
-            int(uid): favs for uid, favs in state.get("user_dir_favorites", {}).items()
-        }
+        window_store.from_dict(state.get("window_states", {}))
+
+        # Load user preferences (starred dirs, MRU, read offsets)
+        user_preferences.from_dict(state)
 
         # Load routing data into ThreadRouter (handles dedup + reverse index)
         thread_router.from_dict(state)
@@ -284,7 +236,7 @@ class SessionManager:
         # Detect old format: keys that don't look like window IDs
         # Foreign windows (emdash) use qualified IDs — not old format.
         needs_migration = False
-        for k in self.window_states:
+        for k in window_store.window_states:
             if not self._is_window_id(k) and not is_foreign_window(k):
                 needs_migration = True
                 break
@@ -302,15 +254,13 @@ class SessionManager:
                 "Detected old-format state (window_name keys), "
                 "will re-resolve on startup"
             )
-            self._needs_migration = True
-        else:
-            self._needs_migration = False
 
     async def resolve_stale_ids(self) -> None:
         """Re-resolve persisted window IDs against live tmux windows.
 
         Called on startup. Delegates to window_resolver for the heavy lifting.
         Dead window bindings and states are preserved for /restore recovery.
+        Also migrates mailbox directories when window IDs change.
         """
         from .window_resolver import LiveWindow, resolve_stale_ids as _resolve
 
@@ -320,11 +270,18 @@ class SessionManager:
             for w in windows
         ]
 
+        # Snapshot old key→display_name mapping for mailbox migration
+        tmux_session = config.tmux_session_name
+        old_display = {
+            wid: thread_router.window_display_names.get(wid, "")
+            for wid in self.window_states
+        }
+
         changed = _resolve(
             live,
             self.window_states,
             thread_router.thread_bindings,
-            self.user_window_offsets,
+            user_preferences.user_window_offsets,
             thread_router.window_display_names,
         )
 
@@ -333,7 +290,8 @@ class SessionManager:
             self._save_state()
             logger.info("Startup re-resolution complete")
 
-        self._needs_migration = False
+            # Migrate mailbox directories for remapped window IDs
+            _migrate_mailbox_ids(old_display, self.window_states, tmux_session)
 
         # Prune session_map.json entries for dead windows
         live_ids = {w.window_id for w in live}
@@ -452,6 +410,17 @@ class SessionManager:
         # Prune stale byte offsets (independent of display/chat pruning)
         all_known = live_window_ids | in_use
         offsets_changed = self.prune_stale_offsets(all_known)
+
+        # Prune dead mailbox directories
+        qualified_live: set[str] = set()
+        for wid in all_known:
+            if is_foreign_window(wid):
+                qualified_live.add(wid)
+            else:
+                qualified_live.add(f"{config.tmux_session_name}:{wid}")
+        from .mailbox import Mailbox
+
+        Mailbox(config.mailbox_dir).prune_dead(qualified_live)
 
         if not stale_display and not stale_chat:
             return offsets_changed
@@ -621,7 +590,7 @@ class SessionManager:
 
         # 5. Stale user_window_offsets
         known_wids = live_window_ids | bound_window_ids | set(self.window_states.keys())
-        for uid, offsets in self.user_window_offsets.items():
+        for uid, offsets in user_preferences.user_window_offsets.items():
             for wid in offsets:
                 if wid not in known_wids:
                     issues.append(
@@ -668,22 +637,7 @@ class SessionManager:
 
         Returns True if any changes were made.
         """
-        changed = False
-        empty_users: list[int] = []
-        for uid, offsets in self.user_window_offsets.items():
-            stale = [wid for wid in offsets if wid not in known_window_ids]
-            for wid in stale:
-                logger.info("Pruning stale offset: user %d, window %s", uid, wid)
-                del offsets[wid]
-                changed = True
-            if not offsets:
-                empty_users.append(uid)
-        for uid in empty_users:
-            del self.user_window_offsets[uid]
-            changed = True
-        if changed:
-            self._save_state()
-        return changed
+        return user_preferences.prune_stale_offsets(known_window_ids)
 
     def prune_stale_window_states(self, live_window_ids: set[str]) -> bool:
         """Remove window_states not in session_map, not bound, and not live.
@@ -959,24 +913,17 @@ class SessionManager:
 
     def get_session_id_for_window(self, window_id: str) -> str | None:
         """Look up session_id for a window from window_states."""
-        state = self.window_states.get(window_id)
-        return state.session_id if state and state.session_id else None
+        return window_store.get_session_id_for_window(window_id)
 
     # --- Window state management ---
 
     def get_window_state(self, window_id: str) -> WindowState:
         """Get or create window state."""
-        if window_id not in self.window_states:
-            self.window_states[window_id] = WindowState()
-        return self.window_states[window_id]
+        return window_store.get_window_state(window_id)
 
     def clear_window_session(self, window_id: str) -> None:
         """Clear session association for a window (e.g., after /clear command)."""
-        state = self.get_window_state(window_id)
-        state.session_id = ""
-        state.notification_mode = "all"
-        self._save_state()
-        logger.info("Cleared session for window_id %s", window_id)
+        window_store.clear_window_session(window_id)
 
     # --- Provider management ---
 
@@ -987,35 +934,8 @@ class SessionManager:
         *,
         cwd: str | None = None,
     ) -> None:
-        """Set the provider for a window. Empty string resets to config default.
-
-        Always saves state unconditionally. When *cwd* is provided, persists it
-        in the same write so provider/cwd updates stay atomic.
-
-        When switching to a hookless provider (e.g. shell), clears any stale
-        session_map.json entry and session_id so hook-based data from a
-        previous provider doesn't cause provider detection flickering.
-        """
-        state = self.get_window_state(window_id)
-        old_provider = state.provider_name
-        state.provider_name = provider_name
-        if cwd:
-            state.cwd = cwd
-
-        # When switching away from a hook-based provider to a hookless one,
-        # clear stale session data that would otherwise cause the poll loop
-        # to re-detect the old provider from session_map.json.
-        if old_provider != provider_name and provider_name:
-            from .providers import registry
-
-            new_prov = registry.get(provider_name)
-            if not new_prov.capabilities.supports_hook:
-                if state.session_id:
-                    state.session_id = ""
-                    state.transcript_path = ""
-                self._clear_session_map_entry(window_id)
-
-        self._save_state()
+        """Set the provider for a window."""
+        window_store.set_window_provider(window_id, provider_name, cwd=cwd)
 
     def _clear_session_map_entry(self, window_id: str) -> None:
         """Remove a window's entry from session_map.json if present."""
@@ -1109,302 +1029,34 @@ class SessionManager:
         self.set_batch_mode(window_id, new_mode)
         return new_mode
 
-    # --- User directory favorites ---
-
-    def get_user_starred(self, user_id: int) -> list[str]:
-        """Get starred directories for a user."""
-        return list(self.user_dir_favorites.get(user_id, {}).get("starred", []))
-
-    def get_user_mru(self, user_id: int) -> list[str]:
-        """Get MRU directories for a user."""
-        return list(self.user_dir_favorites.get(user_id, {}).get("mru", []))
-
-    def update_user_mru(self, user_id: int, path: str) -> None:
-        """Insert path at front of MRU list, dedupe, cap at 5."""
-        resolved = str(Path(path).resolve())
-        favs = self.user_dir_favorites.setdefault(user_id, {})
-        mru: list[str] = favs.get("mru", [])
-        mru = [resolved] + [p for p in mru if p != resolved]
-        favs["mru"] = mru[:5]
-        self._save_state()
-
-    def toggle_user_star(self, user_id: int, path: str) -> bool:
-        """Toggle a directory in/out of starred list. Returns True if now starred."""
-        resolved = str(Path(path).resolve())
-        favs = self.user_dir_favorites.setdefault(user_id, {})
-        starred: list[str] = favs.get("starred", [])
-        if resolved in starred:
-            starred.remove(resolved)
-            now_starred = False
-        else:
-            starred.append(resolved)
-            now_starred = True
-        favs["starred"] = starred
-        self._save_state()
-        return now_starred
-
-    def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
-        """Build the direct file path for a session from session_id and cwd."""
-        if not session_id or not cwd:
-            return None
-        # Encode cwd: /data/code/ccbot -> -data-code-ccbot
-        encoded_cwd = cwd.replace("/", "-")
-        return config.claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
-
-    def _session_from_transcript_path(
-        self,
-        window_id: str,
-        state: WindowState,
-    ) -> ClaudeSession | None:
-        """Build a lightweight session object from persisted transcript_path."""
-        transcript = state.transcript_path
-        if not transcript:
-            return None
-        file_path = Path(transcript)
-        if not file_path.exists():
-            return None
-        summary = state.window_name or self.get_display_name(window_id) or "Untitled"
-        return ClaudeSession(
-            session_id=state.session_id,
-            summary=summary,
-            message_count=-1,  # unknown for non-JSONL transcript shortcuts
-            file_path=str(file_path),
-        )
+    # --- Window → Session resolution (delegated to session_resolver) ---
 
     async def _get_session_direct(
         self, session_id: str, cwd: str, window_id: str = ""
-    ) -> ClaudeSession | None:
-        """Get a ClaudeSession directly from session_id and cwd (no scanning).
+    ) -> "ClaudeSession | None":
+        """Delegate to session_resolver._get_session_direct."""
+        from .session_resolver import session_resolver
 
-        Falls back to glob search when the direct path doesn't exist. If found
-        via glob, attempts to recover the real cwd from the encoded directory
-        name (only when ``window_id`` is provided and the decoded path is an
-        existing absolute directory).
-        """
-        file_path = self._build_session_file_path(session_id, cwd)
+        return await session_resolver._get_session_direct(session_id, cwd, window_id)
 
-        # Fallback: glob search if direct path doesn't exist
-        if not file_path or not file_path.exists():
-            pattern = f"*/{session_id}.jsonl"
-            matches = list(config.claude_projects_path.glob(pattern))
-            if matches:
-                file_path = matches[0]
-                logger.debug("Found session via glob: %s", file_path)
-                # Try to recover real cwd so subsequent calls use direct path.
-                # Encoding: /data/code/ccbot → -data-code-ccbot (replace "/" → "-")
-                # Decoding is ambiguous: -home-user-my-app could be
-                # /home/user/my-app or /home/user/my/app. We accept the
-                # decoded path only if it's an existing absolute directory.
-                encoded_dir = file_path.parent.name
-                decoded_cwd = encoded_dir.replace("-", "/")
-                if (
-                    window_id
-                    and decoded_cwd.startswith("/")
-                    and Path(decoded_cwd).is_dir()
-                ):
-                    state = self.window_states.get(window_id)
-                    if state and state.cwd != decoded_cwd:
-                        logger.info(
-                            "Glob fallback: updating cwd for window %s: %r -> %r",
-                            window_id,
-                            state.cwd,
-                            decoded_cwd,
-                        )
-                        state.cwd = decoded_cwd
-                        self._save_state()
-            else:
-                return None
+    async def resolve_session_for_window(
+        self, window_id: str
+    ) -> "ClaudeSession | None":
+        """Delegate to session_resolver.resolve_session_for_window."""
+        from .session_resolver import session_resolver
 
-        # Single pass: read file once, extract summary + count messages
-        summary = ""
-        last_user_msg = ""
-        message_count = 0
-        provider = get_provider_for_window(window_id)
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                async for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    message_count += 1
-                    try:
-                        data = json.loads(line)
-                        # Check for summary
-                        if data.get("type") == "summary":
-                            s = data.get("summary", "")
-                            if s:
-                                summary = s
-                        # Track last user message as fallback
-                        elif provider.is_user_transcript_entry(data):
-                            parsed = provider.parse_history_entry(data)
-                            if parsed and parsed.text.strip():
-                                last_user_msg = parsed.text.strip()
-                    except json.JSONDecodeError:
-                        continue
-        except OSError:
-            return None
-
-        if not summary:
-            summary = last_user_msg[:50] if last_user_msg else "Untitled"
-
-        return ClaudeSession(
-            session_id=session_id,
-            summary=summary,
-            message_count=message_count,
-            file_path=str(file_path),
-        )
-
-    # --- Window → Session resolution ---
-
-    async def resolve_session_for_window(self, window_id: str) -> ClaudeSession | None:
-        """Resolve a tmux window to the best matching Claude session.
-
-        Uses persisted session_id + cwd to construct file path directly.
-        Returns None if no session is associated with this window.
-        """
-        state = self.get_window_state(window_id)
-
-        if not state.session_id or not state.cwd:
-            return None
-
-        # Hookless providers persist direct transcript paths outside Claude's
-        # projects dir. Prefer that path first to avoid false "missing file"
-        # clears when session_id/cwd don't map to Claude JSONL layout.
-        direct = self._session_from_transcript_path(window_id, state)
-        if direct:
-            return direct
-
-        session = await self._get_session_direct(state.session_id, state.cwd, window_id)
-        if session:
-            return session
-
-        provider = get_provider_for_window(window_id)
-        if not provider.capabilities.supports_hook:
-            logger.debug(
-                "Hookless session unresolved for window_id %s "
-                "(sid=%s, transcript_path=%s); keeping state",
-                window_id,
-                state.session_id,
-                state.transcript_path,
-            )
-            return None
-
-        # File no longer exists, clear state
-        logger.debug(
-            "Session file no longer exists for window_id %s (sid=%s, cwd=%s)",
-            window_id,
-            state.session_id,
-            state.cwd,
-        )
-        state.session_id = ""
-        state.cwd = ""
-        self._save_state()
-        return None
-
-    # --- User window offset management ---
-
-    def get_user_window_offset(self, user_id: int, window_id: str) -> int | None:
-        """Get the user's last read offset for a window.
-
-        Returns None if no offset has been recorded (first time).
-        """
-        user_offsets = self.user_window_offsets.get(user_id)
-        if user_offsets is None:
-            return None
-        return user_offsets.get(window_id)
-
-    def update_user_window_offset(
-        self, user_id: int, window_id: str, offset: int
-    ) -> None:
-        """Update the user's last read offset for a window."""
-        if user_id not in self.user_window_offsets:
-            self.user_window_offsets[user_id] = {}
-        self.user_window_offsets[user_id][window_id] = offset
-        self._save_state()
-
-    # --- Thread binding management (delegated to thread_router) ---
-
-    def bind_thread(
-        self, user_id: int, thread_id: int, window_id: str, window_name: str = ""
-    ) -> None:
-        """Bind a Telegram topic thread to a tmux window."""
-        thread_router.bind_thread(user_id, thread_id, window_id, window_name)
-
-    def unbind_thread(self, user_id: int, thread_id: int) -> str | None:
-        """Remove a thread binding. Returns the previously bound window_id, or None.
-
-        Display name cleanup is handled by thread_router.unbind_thread().
-        """
-        return thread_router.unbind_thread(user_id, thread_id)
-
-    def get_window_for_thread(self, user_id: int, thread_id: int) -> str | None:
-        """Look up the window_id bound to a thread."""
-        return thread_router.get_window_for_thread(user_id, thread_id)
-
-    def get_thread_for_window(self, user_id: int, window_id: str) -> int | None:
-        """Reverse lookup: get thread_id for a window (O(1) via reverse index)."""
-        return thread_router.get_thread_for_window(user_id, window_id)
-
-    def get_all_thread_windows(self, user_id: int) -> dict[int, str]:
-        """Get all thread bindings for a user."""
-        return thread_router.get_all_thread_windows(user_id)
-
-    def resolve_window_for_thread(
-        self,
-        user_id: int,
-        thread_id: int | None,
-    ) -> str | None:
-        """Resolve the tmux window_id for a user's thread."""
-        return thread_router.resolve_window_for_thread(user_id, thread_id)
-
-    def iter_thread_bindings(self) -> Iterator[tuple[int, int, str]]:
-        """Iterate all thread bindings as (user_id, thread_id, window_id)."""
-        return thread_router.iter_thread_bindings()
+        return await session_resolver.resolve_session_for_window(window_id)
 
     def find_users_for_session(
         self,
         session_id: str,
     ) -> list[tuple[int, str, int]]:
-        """Find all users whose thread-bound window maps to the given session_id."""
-        result: list[tuple[int, str, int]] = []
-        for user_id, thread_id, window_id in thread_router.iter_thread_bindings():
-            state = self.window_states.get(window_id)
-            if state and state.session_id == session_id:
-                result.append((user_id, window_id, thread_id))
-        return result
+        """Delegate to session_resolver.find_users_for_session."""
+        from .session_resolver import session_resolver
 
-    # --- Group chat ID management (delegated to thread_router) ---
+        return session_resolver.find_users_for_session(session_id)
 
-    def set_group_chat_id(self, user_id: int, thread_id: int, chat_id: int) -> None:
-        """Store the group chat ID for a user's thread."""
-        thread_router.set_group_chat_id(user_id, thread_id, chat_id)
-
-    def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
-        """Resolve the chat_id for sending messages."""
-        return thread_router.resolve_chat_id(user_id, thread_id)
-
-    # --- Tmux helpers ---
-
-    async def send_to_window(
-        self, window_id: str, text: str, *, raw: bool = False
-    ) -> tuple[bool, str]:
-        """Send text to a tmux window by ID."""
-        display = self.get_display_name(window_id)
-        logger.debug(
-            "send_to_window: window_id=%s (%s), text_len=%d",
-            window_id,
-            display,
-            len(text),
-        )
-        window = await tmux_manager.find_window_by_id(window_id)
-        if not window:
-            return False, "Window not found (may have been closed)"
-        success = await tmux_manager.send_keys(window.window_id, text, raw=raw)
-        if success:
-            return True, f"Sent to {display}"
-        return False, "Failed to send keys"
-
-    # --- Message history ---
+    # --- Message history (delegated to session_resolver) ---
 
     async def get_recent_messages(
         self,
@@ -1413,58 +1065,12 @@ class SessionManager:
         start_byte: int = 0,
         end_byte: int | None = None,
     ) -> tuple[list[dict], int]:
-        """Get user/assistant messages for a window's session.
+        """Delegate to session_resolver.get_recent_messages."""
+        from .session_resolver import session_resolver
 
-        Resolves window → session, then reads the JSONL.
-        Supports byte range filtering via start_byte/end_byte.
-        Returns (messages, total_count).
-        """
-        session = await self.resolve_session_for_window(window_id)
-        if not session or not session.file_path:
-            return [], 0
-
-        file_path = Path(session.file_path)
-        if not file_path.exists():
-            return [], 0
-
-        # Read JSONL entries (optionally filtered by byte range)
-        provider = get_provider_for_window(window_id)
-        entries: list[dict[str, Any]] = []
-        try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
-                if start_byte > 0:
-                    await f.seek(start_byte)
-
-                while True:
-                    # Check byte limit before reading
-                    if end_byte is not None:
-                        current_pos = await f.tell()
-                        if current_pos >= end_byte:
-                            break
-
-                    line = await f.readline()
-                    if not line:
-                        break
-
-                    data = provider.parse_transcript_line(line)
-                    if data:
-                        entries.append(data)
-        except OSError:
-            logger.exception("Error reading session file %s", file_path)
-            return [], 0
-
-        agent_messages, _ = provider.parse_transcript_entries(entries, {})
-        all_messages = [
-            {
-                "role": e.role,
-                "text": e.text,
-                "content_type": e.content_type,
-                "timestamp": e.timestamp,
-            }
-            for e in agent_messages
-        ]
-
-        return all_messages, len(all_messages)
+        return await session_resolver.get_recent_messages(
+            window_id, start_byte=start_byte, end_byte=end_byte
+        )
 
 
 session_manager = SessionManager()

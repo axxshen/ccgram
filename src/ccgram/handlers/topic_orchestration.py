@@ -37,6 +37,17 @@ _topic_create_retry_until: dict[int, float] = {}
 _TOPIC_CREATE_RETRY_BUFFER_SECONDS = 1
 
 
+def clear_topic_create_retry(chat_id: int, _thread_id: int = 0) -> None:
+    """Clear topic creation retry backoff for this chat.
+
+    NOT registered in TopicStateRegistry — the backoff is self-managing:
+    entries expire via the time check in create_topic_in_chat() and are
+    cleared on successful topic creation.  Clearing on every topic teardown
+    would bypass Telegram's flood-control gate prematurely.
+    """
+    _topic_create_retry_until.pop(chat_id, None)
+
+
 def _is_window_already_bound(window_id: str) -> bool:
     """Check if a window is already bound to any topic."""
     return thread_router.has_window(window_id)
@@ -79,7 +90,7 @@ async def _auto_detect_provider(window_id: str) -> None:
         )
 
 
-def _collect_target_chats(window_id: str) -> set[int]:
+def collect_target_chats(window_id: str) -> set[int]:
     """Collect unique group chat IDs for topic creation."""
     seen_chats: set[int] = set()
     for user_id, thread_id, _ in thread_router.iter_thread_bindings():
@@ -129,7 +140,7 @@ def _bind_topic_to_user(
         thread_router.set_group_chat_id(first_user_id, thread_id, chat_id)
 
 
-async def _create_topic_in_chat(
+async def create_topic_in_chat(
     bot: Bot, chat_id: int, window_id: str, topic_name: str
 ) -> None:
     """Create a forum topic in one chat with backoff handling."""
@@ -196,12 +207,12 @@ async def handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
     await _auto_detect_provider(event.window_id)
 
     topic_name = event.window_name or Path(event.cwd).name or event.window_id
-    seen_chats = _collect_target_chats(event.window_id)
+    seen_chats = collect_target_chats(event.window_id)
     if not seen_chats:
         return
 
     for chat_id in seen_chats:
-        await _create_topic_in_chat(bot, chat_id, event.window_id, topic_name)
+        await create_topic_in_chat(bot, chat_id, event.window_id, topic_name)
 
 
 async def adopt_unbound_windows(bot: Bot) -> None:

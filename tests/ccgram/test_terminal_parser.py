@@ -11,6 +11,7 @@ from ccgram.terminal_parser import (
     find_chrome_boundary,
     format_status_display,
     is_likely_spinner,
+    parse_status_block,
     parse_status_line,
     strip_pane_chrome,
 )
@@ -171,6 +172,26 @@ class TestParseStatusLine:
 
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
+
+    def test_parse_status_block_includes_progress_lines(self):
+        pane = (
+            "output\n"
+            "✔ Detect languages and scope\n"
+            "◼ Spawn review agents\n"
+            "◻ Collect agent results\n"
+            "✽ Running py-idioms review…\n"
+            f"{_SEPARATOR}\n"
+            "❯ \n"
+            f"{_SEPARATOR}\n"
+            "   ⎇ main  ✱ Opus 4.6\n"
+        )
+
+        assert parse_status_block(pane) == (
+            "Running py-idioms review…\n"
+            "✔ Detect languages and scope\n"
+            "◼ Spawn review agents\n"
+            "◻ Collect agent results"
+        )
 
 
 class TestExtractInteractiveContent:

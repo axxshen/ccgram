@@ -1,11 +1,12 @@
 """Unified cleanup API for topic state.
 
-Provides centralized cleanup functions that coordinate state cleanup across
-all modules, preventing memory leaks when topics are deleted.
+Orchestrates topic teardown: dispatches registered cleanups via
+TopicStateRegistry, then handles infrastructure and bot-specific async
+cleanup that cannot be registered (log throttle, mailbox I/O, status
+messages, interactive UI, user_data).
 
 Functions:
   - clear_topic_state: Clean up all memory state for a specific topic
-  - clear_dead_notification (delegated): Clear dead window notification tracking
 """
 
 from typing import Any
@@ -14,13 +15,7 @@ from telegram import Bot
 
 from ..utils import log_throttle_reset
 from .interactive_ui import clear_interactive_msg
-from .message_queue import (
-    clear_batch_for_topic,
-    clear_status_msg_info,
-    clear_tool_msg_ids_for_topic,
-    enqueue_status_update,
-)
-from .topic_emoji import clear_topic_emoji_state
+from .message_queue import clear_status_msg_info, enqueue_status_update
 from .user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT, VOICE_PENDING
 
 
@@ -30,19 +25,37 @@ async def clear_topic_state(
     bot: Bot | None = None,
     user_data: dict[str, Any] | None = None,
     window_id: str | None = None,
+    *,
+    window_dead: bool = True,
 ) -> None:
     """Clear all memory state associated with a topic.
 
-    This should be called when:
-      - A topic is closed or deleted
-      - A thread binding becomes stale (window deleted externally)
+    Dispatches registered cleanups via TopicStateRegistry, then handles
+    bot-specific async cleanup and infrastructure I/O that cannot be
+    registered as simple callbacks.
 
-    Removes full dict entries from _topic_poll_state / _window_poll_state
-    (not just field resets) to prevent orphaned state accumulation.
-    Also cleans up status messages, tool tracking, interactive UI, emoji,
-    command history, and user_data pending state.
+    Args:
+        window_dead: When False, skip qualified-scope cleanup (delivery state,
+            peer metadata, spawn requests) because the tmux window is still
+            alive.  Callers that keep the window running (topic close, /unbind)
+            should pass ``window_dead=False``.
     """
-    # Clear status message from Telegram (if bot available) or just tracking
+    from ..config import config
+    from ..thread_router import thread_router
+    from ..window_resolver import is_foreign_window
+    from ..topic_state_registry import topic_state
+
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+
+    qualified_id: str | None = None
+    if window_id and window_dead:
+        qualified_id = (
+            window_id
+            if is_foreign_window(window_id)
+            else f"{config.tmux_session_name}:{window_id}"
+        )
+
+    # Enqueue status-message delete BEFORE registry clears the message ID
     if bot is not None:
         await enqueue_status_update(
             bot, user_id, window_id or "", None, thread_id=thread_id
@@ -50,66 +63,34 @@ async def clear_topic_state(
     else:
         clear_status_msg_info(user_id, thread_id)
 
-    # Clear tool message ID tracking and active batch
-    clear_tool_msg_ids_for_topic(user_id, thread_id)
-    clear_batch_for_topic(user_id, thread_id)
-
-    # Clear poll state (lazy import to avoid circular dep)
-    from .polling_strategies import (
-        clear_dead_notification,
-        clear_pane_alerts,
-        clear_topic_poll_state,
-        clear_window_poll_state,
+    # Registry dispatch — all module-specific per-topic/window/chat state
+    topic_state.clear_all(
+        user_id,
+        thread_id,
+        window_id=window_id,
+        qualified_id=qualified_id,
+        chat_id=chat_id,
     )
 
-    clear_dead_notification(user_id, thread_id)
-    clear_topic_poll_state(user_id, thread_id)
+    # Infrastructure cleanup (formatted keys, file I/O — not registerable)
+    log_throttle_reset(f"status-update:{user_id}:{thread_id}")
     if window_id:
-        from ..tmux_manager import clear_vim_state
-
-        clear_vim_state(window_id)
-        clear_window_poll_state(window_id)
-        clear_pane_alerts(window_id)
         log_throttle_reset(f"topic-probe:{window_id}")
-        log_throttle_reset(f"status-update:{user_id}:{thread_id}")
-        from .hook_events import clear_subagents
+        from ..mailbox import Mailbox
 
-        clear_subagents(window_id)
+        mb = Mailbox(config.mailbox_dir)
+        if qualified_id is not None:
+            mb.clear_inbox(qualified_id)
 
-    # Clear interactive UI state (also deletes message from chat)
     await clear_interactive_msg(user_id, bot, thread_id)
 
-    # Clear topic emoji tracking (needs chat_id; use 0 as fallback)
-    from ..thread_router import thread_router
-
-    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-    clear_topic_emoji_state(chat_id, thread_id)
-
-    # Clear command history for this topic
-    from .command_history import clear_history
-
-    clear_history(user_id, thread_id)
-
-    # Clear shell provider state (capture tasks + pending commands + passive monitor)
-    from .shell_capture import clear_shell_monitor_state
-    from .shell_commands import clear_shell_pending
-
-    clear_shell_pending(chat_id, thread_id)
-    if window_id:
-        clear_shell_monitor_state(window_id)
-        from ..providers.process_detection import clear_detection_cache
-
-        clear_detection_cache(window_id)
-
-    # Clear pending thread state from user_data
+    # user_data cleanup
     if user_data is not None and user_data.get(PENDING_THREAD_ID) == thread_id:
         user_data.pop(PENDING_THREAD_ID, None)
         user_data.pop(PENDING_THREAD_TEXT, None)
 
-    # Clear pending voice transcriptions for this chat
     if user_data is not None:
         voice_store: dict[tuple[int, int], str] = user_data.get(VOICE_PENDING, {})
-        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
         stale = [k for k in voice_store if k[0] == chat_id]
         for k in stale:
             voice_store.pop(k, None)

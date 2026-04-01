@@ -17,17 +17,19 @@ Key components:
 """
 
 import asyncio
-import structlog
+import contextlib
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+import structlog
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import RetryAfter, TelegramError
 
-import contextlib
-
+from ..claude_task_state import get_claude_task_snapshot, get_claude_wait_header
 from ..session import session_manager
 from ..thread_router import thread_router
+from ..topic_state_registry import topic_state
 from ..utils import task_done_callback
 from .callback_data import (
     CB_STATUS_ESC,
@@ -60,6 +62,7 @@ class ToolBatchEntry:
     tool_use_id: str | None
     tool_use_text: str  # Formatted summary from build_response_parts
     tool_result_text: str | None = None  # None until result arrives
+    tool_name: str | None = None
 
 
 @dataclass
@@ -92,22 +95,197 @@ def format_batch_message(
         ✏️ Edit  src/foo.py       ⎿  +3 −1
         ⚡ Bash  make test        ⏳
     """
+    task_create_message = _format_task_create_batch(entries, subagent_label)
+    if task_create_message is not None:
+        return task_create_message
+
     count = len(entries)
     label = "tool call" if count == 1 else "tool calls"
     header = f"\u26a1 {count} {label}"
-    if subagent_label:
+    has_task_tools = any(entry.tool_name in _TASK_TOOL_NAMES for entry in entries)
+    if subagent_label and not has_task_tools:
         header = f"{header} [{subagent_label}]"
     lines = [header]
+    if subagent_label and has_task_tools:
+        lines.append(subagent_label)
 
-    for entry in entries:
-        line = entry.tool_use_text
-        if entry.tool_result_text is not None:
-            line = f"{line}  \u23bf  {entry.tool_result_text}"
-        else:
-            line = f"{line}  \u23f3"
-        lines.append(line)
+    lines.extend(_format_mixed_batch_lines(entries))
 
     return "\n".join(lines)
+
+
+_MARKDOWN_TOOL_PREFIX_RE = re.compile(r"^\*\*([^*]+)\*\*(.*)$")
+_PLAIN_TASK_CREATE_RE = re.compile(r"^TaskCreate\s+(.+)$")
+_TASK_TOOL_NAMES = frozenset({"TaskCreate", "TaskUpdate", "TaskList"})
+_MIN_BACKTICK_WRAPPED_LENGTH = 2
+
+
+def _format_task_create_batch(
+    entries: list[ToolBatchEntry], subagent_label: str | None
+) -> str | None:
+    """Render TaskCreate bursts as a numbered task list."""
+    if not entries or any(entry.tool_name != "TaskCreate" for entry in entries):
+        return None
+
+    titles = [_extract_task_create_title(entry) for entry in entries]
+    if any(not title for title in titles):
+        return None
+
+    action = (
+        "Created"
+        if all(entry.tool_result_text is not None for entry in entries)
+        else "Creating"
+    )
+    task_label = "task" if len(entries) == 1 else "tasks"
+    lines: list[str] = []
+    if subagent_label:
+        lines.append(subagent_label)
+    if action == "Creating":
+        lines.append(f"{action} {len(entries)} {task_label}\u2026")
+    else:
+        lines.append(f"{action} {len(entries)} {task_label}")
+    lines.extend(f"{index}. {title}" for index, title in enumerate(titles, start=1))
+    return "\n".join(lines)
+
+
+def _format_mixed_batch_lines(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render batch body lines, grouping task-tool runs into task sections."""
+    lines: list[str] = []
+    index = 0
+
+    while index < len(entries):
+        entry = entries[index]
+        if entry.tool_name == "TaskCreate":
+            task_entries: list[ToolBatchEntry] = []
+            while index < len(entries) and entries[index].tool_name == "TaskCreate":
+                task_entries.append(entries[index])
+                index += 1
+            section = _format_task_create_section(task_entries)
+            if section:
+                lines.extend(section)
+            else:
+                lines.extend(_format_batch_entry(task) for task in task_entries)
+            continue
+        if entry.tool_name == "TaskUpdate":
+            update_entries: list[ToolBatchEntry] = []
+            while index < len(entries) and entries[index].tool_name == "TaskUpdate":
+                update_entries.append(entries[index])
+                index += 1
+            section = _format_task_update_section(update_entries)
+            if section:
+                lines.extend(section)
+            else:
+                lines.extend(_format_batch_entry(task) for task in update_entries)
+            continue
+        if entry.tool_name == "TaskList":
+            lines.extend(_format_task_list_section(entry))
+            index += 1
+            continue
+
+        lines.append(_format_batch_entry(entry))
+        index += 1
+
+    return lines
+
+
+def _format_task_create_section(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render a contiguous TaskCreate run inside a mixed batch."""
+    if not entries:
+        return []
+
+    titles = [_extract_task_create_title(entry) for entry in entries]
+    if any(not title for title in titles):
+        return []
+
+    action = (
+        "Created"
+        if all(entry.tool_result_text is not None for entry in entries)
+        else "Creating"
+    )
+    task_label = "task" if len(entries) == 1 else "tasks"
+    heading = (
+        f"{action} {len(entries)} {task_label}\u2026"
+        if action == "Creating"
+        else f"{action} {len(entries)} {task_label}"
+    )
+    return [
+        heading,
+        *(f"{index}. {title}" for index, title in enumerate(titles, start=1)),
+    ]
+
+
+def _format_task_update_section(entries: list[ToolBatchEntry]) -> list[str]:
+    """Render a contiguous TaskUpdate run inside a mixed batch."""
+    if not entries:
+        return []
+
+    labels = [_extract_task_tool_suffix(entry) for entry in entries]
+    if any(not label for label in labels):
+        return []
+
+    action = (
+        "Updated"
+        if all(entry.tool_result_text is not None for entry in entries)
+        else "Updating"
+    )
+    task_label = "task" if len(entries) == 1 else "tasks"
+    heading = (
+        f"{action} {len(entries)} {task_label}\u2026"
+        if action == "Updating"
+        else f"{action} {len(entries)} {task_label}"
+    )
+    return [heading, *(f"- {label}" for label in labels)]
+
+
+def _format_task_list_section(entry: ToolBatchEntry) -> list[str]:
+    """Render TaskList as task-list sync progress."""
+    summary = _extract_task_tool_suffix(entry)
+    heading = (
+        "Synced task list"
+        if entry.tool_result_text is not None
+        else "Refreshing task list\u2026"
+    )
+    if summary and summary != "refresh":
+        heading = f"{heading} ({summary})"
+    return [heading]
+
+
+def _format_batch_entry(entry: ToolBatchEntry) -> str:
+    """Render one standard batch row."""
+    line = entry.tool_use_text
+    if entry.tool_result_text is not None:
+        return f"{line}  \u23bf  {entry.tool_result_text}"
+    return f"{line}  \u23f3"
+
+
+def _extract_task_create_title(entry: ToolBatchEntry) -> str:
+    """Extract the visible title from a TaskCreate summary."""
+    return _extract_task_tool_suffix(entry)
+
+
+def _extract_task_tool_suffix(entry: ToolBatchEntry) -> str:
+    """Extract the summary text after a markdown/plain task-tool prefix."""
+    text = entry.tool_use_text.strip()
+    if not text:
+        return ""
+
+    markdown_match = _MARKDOWN_TOOL_PREFIX_RE.match(text)
+    if markdown_match:
+        _tool_name, suffix = markdown_match.groups()
+        stripped = suffix.strip()
+        if (
+            stripped.startswith("`")
+            and stripped.endswith("`")
+            and len(stripped) >= _MIN_BACKTICK_WRAPPED_LENGTH
+        ):
+            stripped = stripped[1:-1].strip()
+        return stripped
+
+    plain_match = _PLAIN_TASK_CREATE_RE.match(text)
+    if plain_match:
+        return plain_match.group(1).strip()
+
+    return text
 
 
 def build_status_keyboard(
@@ -169,6 +347,7 @@ class MessageTask:
     # content type fields
     parts: list[str] = field(default_factory=list)
     tool_use_id: str | None = None
+    tool_name: str | None = None
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
 
@@ -183,7 +362,7 @@ _queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 
 # Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
-_status_msg_info: dict[tuple[int, int], tuple[int, str, str]] = {}
+_status_msg_info: dict[tuple[int, int], tuple[int, str, str, int]] = {}
 
 # Active tool batches: (user_id, thread_id_or_0) -> ToolBatch
 _active_batches: dict[tuple[int, int], ToolBatch] = {}
@@ -389,6 +568,7 @@ async def _process_batch_task(bot: Bot, user_id: int, task: MessageTask) -> None
         entry = ToolBatchEntry(
             tool_use_id=task.tool_use_id,
             tool_use_text=entry_text,
+            tool_name=task.tool_name,
         )
         batch.entries.append(entry)
         batch.total_length += len(entry_text)
@@ -539,7 +719,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                             bkey = (user_id, thread_id)
                             if bkey in _active_batches:
                                 await _flush_batch(bot, user_id, thread_id)
-                            await _do_clear_status_message(bot, user_id, thread_id)
+                            await _process_status_clear_task(bot, user_id, task)
                         break
                     except RetryAfter as e:
                         retry_secs = min(
@@ -664,10 +844,7 @@ async def _convert_status_to_content(
     if not info:
         return None
 
-    thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-
-    msg_id, stored_wid, _ = info
+    msg_id, stored_wid, _, chat_id = info
     if stored_wid != window_id:
         # Different window, just delete the old status
         with contextlib.suppress(TelegramError):
@@ -695,9 +872,55 @@ def _get_idle_history(
     from .callback_data import IDLE_STATUS_TEXT
     from .command_history import get_history
 
-    if status_text != IDLE_STATUS_TEXT:
+    first_line = status_text.split("\n", 1)[0]
+    if first_line != IDLE_STATUS_TEXT:
         return None
     return get_history(user_id, thread_id_or_0, limit=2) or None
+
+
+def _format_claude_task_status(window_id: str, base_text: str | None) -> str | None:
+    """Compose Claude wait/task state into the status bubble text."""
+    snapshot = get_claude_task_snapshot(window_id)
+    wait_header = get_claude_wait_header(window_id)
+    if snapshot is None and not wait_header:
+        return base_text
+
+    lines: list[str] = []
+    header = wait_header or base_text
+    if header:
+        lines.append(header)
+
+    if snapshot is not None:
+        lines.append(
+            f"{snapshot.total_count} tasks ({snapshot.done_count} done, {snapshot.open_count} open)"
+        )
+        visible_items = snapshot.items[:8]
+        for item in visible_items:
+            if item.status == "completed":
+                glyph = "✔"
+            elif item.status == "in_progress":
+                glyph = "◔"
+            else:
+                glyph = "◻"
+
+            label = (
+                item.active_form
+                if item.status == "in_progress" and item.active_form
+                else item.subject
+            )
+            if item.owner:
+                label = f"{label} ({item.owner})"
+            line = f"{glyph} #{item.task_id} {label}".rstrip()
+            if item.blocked_by:
+                blocked = ", ".join(f"#{task_id}" for task_id in item.blocked_by)
+                line = f"{line} blocked by {blocked}"
+            lines.append(line)
+
+        hidden_count = snapshot.total_count - len(visible_items)
+        if hidden_count > 0:
+            lines.append(f"+{hidden_count} more")
+
+    return "\n".join(lines) if lines else base_text
 
 
 async def _process_status_update_task(
@@ -706,10 +929,9 @@ async def _process_status_update_task(
     """Process a status update task."""
     window_id = task.window_id or ""
     thread_id = task.thread_id or 0
-    chat_id = thread_router.resolve_chat_id(user_id, task.thread_id)
     skey = (user_id, thread_id)
     # task.text must be pre-formatted (display_label from StatusUpdate, not raw terminal text)
-    status_text = task.text or ""
+    status_text = _format_claude_task_status(window_id, task.text)
 
     if not status_text:
         # No status text means clear status
@@ -719,7 +941,7 @@ async def _process_status_update_task(
     current_info = _status_msg_info.get(skey)
 
     if current_info:
-        msg_id, stored_wid, last_text = current_info
+        msg_id, stored_wid, last_text, stored_chat_id = current_info
 
         if stored_wid != window_id:
             # Window changed - delete old and send new
@@ -736,13 +958,18 @@ async def _process_status_update_task(
             keyboard = build_status_keyboard(window_id, history=history)
             success = await edit_with_fallback(
                 bot,
-                chat_id,
+                stored_chat_id,
                 msg_id,
                 status_text,
                 reply_markup=keyboard,
             )
             if success:
-                _status_msg_info[skey] = (msg_id, window_id, status_text)
+                _status_msg_info[skey] = (
+                    msg_id,
+                    window_id,
+                    status_text,
+                    stored_chat_id,
+                )
             else:
                 # Edit failed (message deleted, rate limit, etc.)
                 # Clear tracking and let the next poll cycle recreate it
@@ -751,6 +978,17 @@ async def _process_status_update_task(
     else:
         # No existing status message, send new
         await _do_send_status_message(bot, user_id, thread_id, window_id, status_text)
+
+
+async def _process_status_clear_task(bot: Bot, user_id: int, task: MessageTask) -> None:
+    """Delete or re-render a status message after a clear request."""
+    thread_id = task.thread_id or 0
+    window_id = task.window_id or ""
+    status_text = _format_claude_task_status(window_id, None)
+    if status_text and window_id:
+        await _do_send_status_message(bot, user_id, thread_id, window_id, status_text)
+        return
+    await _do_clear_status_message(bot, user_id, thread_id)
 
 
 async def _do_send_status_message(
@@ -774,15 +1012,15 @@ async def _do_send_status_message(
     # Guard: if a status message already exists, edit it instead of sending new
     existing = _status_msg_info.get(skey)
     if existing:
-        msg_id, stored_wid, last_text = existing
+        msg_id, stored_wid, last_text, stored_chat_id = existing
         if stored_wid == window_id and text == last_text:
             return  # identical, nothing to do
         if stored_wid == window_id:
             success = await edit_with_fallback(
-                bot, chat_id, msg_id, text, reply_markup=keyboard
+                bot, stored_chat_id, msg_id, text, reply_markup=keyboard
             )
             if success:
-                _status_msg_info[skey] = (msg_id, window_id, text)
+                _status_msg_info[skey] = (msg_id, window_id, text, stored_chat_id)
                 return
             # Edit failed — clear tracking, fall through to send new
             _status_msg_info.pop(skey, None)
@@ -798,7 +1036,7 @@ async def _do_send_status_message(
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
-        _status_msg_info[skey] = (sent.message_id, window_id, text)
+        _status_msg_info[skey] = (sent.message_id, window_id, text, chat_id)
 
 
 async def _do_clear_status_message(
@@ -810,9 +1048,7 @@ async def _do_clear_status_message(
     skey = (user_id, thread_id_or_0)
     info = _status_msg_info.pop(skey, None)
     if info:
-        msg_id = info[0]
-        thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
-        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+        msg_id, _, _, chat_id = info
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except TelegramError as e:
@@ -825,6 +1061,7 @@ async def enqueue_content_message(
     window_id: str,
     parts: list[str],
     tool_use_id: str | None = None,
+    tool_name: str | None = None,
     content_type: str = "text",
     text: str | None = None,
     thread_id: int | None = None,
@@ -838,6 +1075,7 @@ async def enqueue_content_message(
         window_id=window_id,
         parts=parts,
         tool_use_id=tool_use_id,
+        tool_name=tool_name,
         content_type=content_type,
         thread_id=thread_id,
     )
@@ -862,22 +1100,36 @@ async def enqueue_status_update(
             thread_id=thread_id,
         )
     else:
-        task = MessageTask(task_type="status_clear", thread_id=thread_id)
+        task = MessageTask(
+            task_type="status_clear",
+            window_id=window_id,
+            thread_id=thread_id,
+        )
 
     queue.put_nowait(task)
 
 
 def clear_status_msg_info(user_id: int, thread_id: int | None = None) -> None:
-    """Clear status message tracking for a user (and optionally a specific thread)."""
+    """Clear status message tracking for a user (and optionally a specific thread).
+
+    NOT registered with TopicStateRegistry — must only be called explicitly
+    from cleanup.py in the ``bot is None`` path.  When a bot is available,
+    ``_do_clear_status_message`` (via the queued ``status_clear`` task) pops
+    the entry *and* deletes the Telegram message.  Registering this function
+    with the registry would pop the entry before the worker runs, preventing
+    the actual Telegram delete.
+    """
     skey = (user_id, thread_id or 0)
     _status_msg_info.pop(skey, None)
 
 
+@topic_state.register("topic")
 def clear_batch_for_topic(user_id: int, thread_id: int | None = None) -> None:
     """Clear active batch for a specific topic (called on topic cleanup)."""
     _active_batches.pop((user_id, thread_id or 0), None)
 
 
+@topic_state.register("topic")
 def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> None:
     """Clear tool message ID tracking for a specific topic.
 
@@ -894,7 +1146,7 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
 
 async def shutdown_workers() -> None:
     """Stop all queue workers (called during bot shutdown)."""
-    for _user_id, worker in list(_queue_workers.items()):
+    for _, worker in list(_queue_workers.items()):
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await worker

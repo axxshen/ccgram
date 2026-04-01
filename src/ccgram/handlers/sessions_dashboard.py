@@ -164,11 +164,12 @@ async def handle_sessions_kill_confirm(
     if w:
         await tmux_manager.kill_window(w.window_id)
 
-    # Unbind ALL users bound to this window
+    # Clean up BEFORE unbind — resolve_chat_id needs group_chat_ids
+    # which unbind_thread deletes
     for uid, tid, bound_wid in list(thread_router.iter_thread_bindings()):
         if bound_wid == window_id:
-            thread_router.unbind_thread(uid, tid)
             await clear_topic_state(uid, tid, bot, window_id=window_id)
+            thread_router.unbind_thread(uid, tid)
 
     logger.info(
         "sessions_kill_confirm: killed window %s (%s), user=%d",

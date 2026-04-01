@@ -15,6 +15,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from ..providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
 from ..session import session_manager
+from ..user_preferences import user_preferences
 from ..thread_router import thread_router
 from ..telegram_sender import split_message
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
@@ -199,4 +200,4 @@ async def send_history(
 
     # Update user's read offset after viewing unread
     if is_unread and user_id is not None and end_byte > 0:
-        session_manager.update_user_window_offset(user_id, window_id, end_byte)
+        user_preferences.update_user_window_offset(user_id, window_id, end_byte)

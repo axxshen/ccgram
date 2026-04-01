@@ -6,13 +6,13 @@ from unittest.mock import Mock, patch
 import pytest
 
 from ccgram.handlers.directory_browser import build_directory_browser, get_favorites
-from ccgram.session import SessionManager
+from ccgram.user_preferences import UserPreferences
 
 
 @pytest.fixture
 def mock_session_manager():
     with patch(
-        "ccgram.handlers.directory_browser.session_manager", spec=SessionManager
+        "ccgram.handlers.directory_browser.user_preferences", spec=UserPreferences
     ) as mgr:
         mgr.get_user_starred.return_value = []
         mgr.get_user_mru.return_value = []

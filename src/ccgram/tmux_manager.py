@@ -18,6 +18,7 @@ Module-level: _vim_state cache, _vim_locks for per-window send serialization.
 import asyncio
 import contextlib
 import fnmatch
+import shlex
 import structlog
 import subprocess
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ import libtmux
 from libtmux.exc import LibTmuxException
 
 from .config import config
+from .topic_state_registry import topic_state
 from .providers import detect_provider_from_command
 from .window_resolver import EMDASH_SESSION_PREFIX as _EMDASH_PREFIX, is_foreign_window
 
@@ -55,6 +57,7 @@ def notify_vim_insert_seen(window_id: str) -> None:
     _vim_state[window_id] = True
 
 
+@topic_state.register("window")
 def clear_vim_state(window_id: str) -> None:
     """Remove vim state cache entry and lock for a window (called on cleanup)."""
     _vim_state.pop(window_id, None)
@@ -989,6 +992,18 @@ class TmuxManager:
                     return pane
         return None
 
+    @staticmethod
+    def _start_agent_in_pane(
+        pane: libtmux.Pane,
+        launch_command: str,
+        agent_args: str,
+    ) -> None:
+        """Send launch command to pane, appending agent_args if provided."""
+        cmd = launch_command
+        if agent_args:
+            cmd = f"{cmd} {agent_args}"
+        pane.send_keys(cmd, enter=True)
+
     async def create_window(
         self,
         work_dir: str,
@@ -1038,21 +1053,20 @@ class TmuxManager:
                 )
 
                 new_window_id = window.window_id or ""
+                pane = window.active_pane
 
-                # Disable automatic-rename for windows without an agent CLI
-                # (plain shell). Tmux auto-renames based on the current process,
-                # which causes topic emoji flickering as the display name changes.
+                # Set CCGRAM_WINDOW_ID so agents can self-identify
+                qualified_id = f"{self.session_name}:{new_window_id}"
+                if pane and new_window_id:
+                    pane.send_keys(
+                        f"export CCGRAM_WINDOW_ID={shlex.quote(qualified_id)}",
+                        enter=True,
+                    )
+
                 if not (start_agent and launch_command):
                     window.set_option("automatic-rename", "off")
-
-                # Start agent CLI if requested
-                if start_agent and launch_command:
-                    pane = window.active_pane
-                    if pane:
-                        cmd = launch_command
-                        if agent_args:
-                            cmd = f"{cmd} {agent_args}"
-                        pane.send_keys(cmd, enter=True)
+                elif pane:
+                    self._start_agent_in_pane(pane, launch_command, agent_args)
 
                 logger.info(
                     "Created window '%s' (id=%s) at %s",
@@ -1076,3 +1090,29 @@ class TmuxManager:
 
 # Global instance with default session name
 tmux_manager = TmuxManager()
+
+
+async def send_to_window(
+    window_id: str, text: str, *, raw: bool = False
+) -> tuple[bool, str]:
+    """Send text to a tmux window by ID.
+
+    Returns (success, message). Looks up the display name for logging, then
+    delegates to tmux_manager.find_window_by_id + send_keys.
+    """
+    from .thread_router import thread_router
+
+    display = thread_router.get_display_name(window_id)
+    logger.debug(
+        "send_to_window: window_id=%s (%s), text_len=%d",
+        window_id,
+        display,
+        len(text),
+    )
+    window = await tmux_manager.find_window_by_id(window_id)
+    if not window:
+        return False, "Window not found (may have been closed)"
+    success = await tmux_manager.send_keys(window.window_id, text, raw=raw)
+    if success:
+        return True, f"Sent to {display}"
+    return False, "Failed to send keys"

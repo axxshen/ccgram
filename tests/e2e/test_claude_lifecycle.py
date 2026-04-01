@@ -5,6 +5,8 @@ import shutil
 
 import pytest
 
+from ccgram.thread_router import thread_router
+
 from ._helpers import (
     TEST_THREAD_ID,
     TEST_USER_ID,
@@ -156,7 +158,9 @@ async def test_recovery_fresh_start(e2e_app, work_dir):
     deadline = asyncio.get_event_loop().time() + 15
     new_window_id = None
     while asyncio.get_event_loop().time() < deadline:
-        new_window_id = session_mgr.get_window_for_thread(TEST_USER_ID, TEST_THREAD_ID)
+        new_window_id = thread_router.get_window_for_thread(
+            TEST_USER_ID, TEST_THREAD_ID
+        )
         if new_window_id is not None:
             break
         await asyncio.sleep(0.5)
@@ -210,7 +214,9 @@ async def test_recovery_continue(e2e_app, work_dir):
     deadline = asyncio.get_event_loop().time() + 15
     new_window_id = None
     while asyncio.get_event_loop().time() < deadline:
-        new_window_id = session_mgr.get_window_for_thread(TEST_USER_ID, TEST_THREAD_ID)
+        new_window_id = thread_router.get_window_for_thread(
+            TEST_USER_ID, TEST_THREAD_ID
+        )
         if new_window_id is not None:
             break
         await asyncio.sleep(0.5)
@@ -269,8 +275,8 @@ async def test_multi_topic_isolation(e2e_app, work_dir):
     assert window_a != window_b
 
     # Verify each topic is bound to its own window
-    assert session_mgr.get_window_for_thread(TEST_USER_ID, thread_a) == window_a
-    assert session_mgr.get_window_for_thread(TEST_USER_ID, thread_b) == window_b
+    assert thread_router.get_window_for_thread(TEST_USER_ID, thread_a) == window_a
+    assert thread_router.get_window_for_thread(TEST_USER_ID, thread_b) == window_b
 
     # Send message to topic A and verify it arrives in window A
     calls.clear()

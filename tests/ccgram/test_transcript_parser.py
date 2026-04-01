@@ -97,6 +97,17 @@ class TestFormatToolUseSummary:
                 "\U0001f916 **Task** `analyze code`",
             ),
             (
+                "TaskCreate",
+                {"subject": "Understand the problem domain"},
+                "**TaskCreate** `Understand the problem domain`",
+            ),
+            (
+                "TaskUpdate",
+                {"subject": "Understand the problem domain", "status": "completed"},
+                "**TaskUpdate** `Understand the problem domain -> completed`",
+            ),
+            ("TaskList", {}, "**TaskList** `refresh`"),
+            (
                 "WebFetch",
                 {"url": "https://example.com"},
                 "\U0001f310 **WebFetch** `https://example.com`",
@@ -136,6 +147,9 @@ class TestFormatToolUseSummary:
             "Grep",
             "Glob",
             "Task",
+            "TaskCreate",
+            "TaskUpdate",
+            "TaskList",
             "WebFetch",
             "WebSearch",
             "TodoWrite",

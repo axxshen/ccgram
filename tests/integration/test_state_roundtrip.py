@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 from ccgram.session import SessionManager
+from ccgram.thread_router import thread_router
+from ccgram.user_preferences import user_preferences
 
 pytestmark = pytest.mark.integration
 
@@ -35,64 +37,66 @@ def make_session_manager(tmp_path, monkeypatch):
     "setup_fn, check_fn",
     [
         pytest.param(
-            lambda sm: sm.bind_thread(
+            lambda sm: thread_router.bind_thread(
                 user_id=1, thread_id=42, window_id="@0", window_name="test-proj"
             ),
             lambda sm: (
-                sm.get_window_for_thread(user_id=1, thread_id=42) == "@0"
+                thread_router.get_window_for_thread(user_id=1, thread_id=42) == "@0"
                 and sm.get_display_name("@0") == "test-proj"
             ),
             id="bind-thread",
         ),
         pytest.param(
             lambda sm: (
-                sm.bind_thread(user_id=1, thread_id=10, window_id="@0"),
-                sm.bind_thread(user_id=1, thread_id=20, window_id="@1"),
-                sm.unbind_thread(user_id=1, thread_id=10),
+                thread_router.bind_thread(user_id=1, thread_id=10, window_id="@0"),
+                thread_router.bind_thread(user_id=1, thread_id=20, window_id="@1"),
+                thread_router.unbind_thread(user_id=1, thread_id=10),
             ),
             lambda sm: (
-                sm.get_window_for_thread(user_id=1, thread_id=10) is None
-                and sm.get_window_for_thread(user_id=1, thread_id=20) == "@1"
+                thread_router.get_window_for_thread(user_id=1, thread_id=10) is None
+                and thread_router.get_window_for_thread(user_id=1, thread_id=20) == "@1"
             ),
             id="unbind-thread",
         ),
         pytest.param(
             lambda sm: (
-                sm.bind_thread(
+                thread_router.bind_thread(
                     user_id=100, thread_id=1, window_id="@0", window_name="proj-a"
                 ),
-                sm.bind_thread(
+                thread_router.bind_thread(
                     user_id=200, thread_id=2, window_id="@1", window_name="proj-b"
                 ),
             ),
             lambda sm: (
-                sm.get_window_for_thread(100, 1) == "@0"
-                and sm.get_window_for_thread(200, 2) == "@1"
+                thread_router.get_window_for_thread(100, 1) == "@0"
+                and thread_router.get_window_for_thread(200, 2) == "@1"
                 and sm.get_display_name("@0") == "proj-a"
                 and sm.get_display_name("@1") == "proj-b"
             ),
             id="multiple-users",
         ),
         pytest.param(
-            lambda sm: sm.set_group_chat_id(user_id=1, thread_id=42, chat_id=-100123),
-            lambda sm: sm.resolve_chat_id(1, 42) == -100123,
+            lambda sm: thread_router.set_group_chat_id(
+                user_id=1, thread_id=42, chat_id=-100123
+            ),
+            lambda sm: thread_router.resolve_chat_id(1, 42) == -100123,
             id="group-chat-ids",
         ),
         pytest.param(
-            lambda sm: sm.update_user_window_offset(
+            lambda sm: user_preferences.update_user_window_offset(
                 user_id=1, window_id="@0", offset=12345
             ),
-            lambda sm: sm.get_user_window_offset(1, "@0") == 12345,
+            lambda sm: user_preferences.get_user_window_offset(1, "@0") == 12345,
             id="user-offsets",
         ),
         pytest.param(
             lambda sm: (
-                sm.toggle_user_star(user_id=1, path="/tmp/starred-proj"),
-                sm.update_user_mru(user_id=1, path="/tmp/recent-proj"),
+                user_preferences.toggle_user_star(user_id=1, path="/tmp/starred-proj"),
+                user_preferences.update_user_mru(user_id=1, path="/tmp/recent-proj"),
             ),
             lambda sm: (
-                any("starred-proj" in s for s in sm.get_user_starred(1))
-                and any("recent-proj" in s for s in sm.get_user_mru(1))
+                any("starred-proj" in s for s in user_preferences.get_user_starred(1))
+                and any("recent-proj" in s for s in user_preferences.get_user_mru(1))
             ),
             id="directory-favorites",
         ),
@@ -141,6 +145,6 @@ async def test_duplicate_bindings_deduped_on_load(tmp_path, monkeypatch) -> None
         "ccgram.config.config.session_map_file", tmp_path / "session_map.json"
     )
 
-    sm = SessionManager()
-    assert sm.get_window_for_thread(1, 10) is None
-    assert sm.get_window_for_thread(1, 20) == "@0"
+    SessionManager()
+    assert thread_router.get_window_for_thread(1, 10) is None
+    assert thread_router.get_window_for_thread(1, 20) == "@0"

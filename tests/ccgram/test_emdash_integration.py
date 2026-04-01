@@ -13,6 +13,7 @@ from ccgram.session import (
     WindowState,
     parse_emdash_provider,
 )
+from ccgram.thread_router import thread_router
 from ccgram.window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window
 
 # ── Pure helpers ──────────────────────────────────────────────────────
@@ -258,13 +259,13 @@ class TestPruneStaleWindowStatesEmdash:
 class TestForeignWindowBindings:
     def test_bind_and_resolve_foreign_window(self, mgr: SessionManager) -> None:
         emdash_wid = "emdash-claude-main-abc:@0"
-        mgr.bind_thread(100, 42, emdash_wid, window_name="proj")
-        assert mgr.get_window_for_thread(100, 42) == emdash_wid
+        thread_router.bind_thread(100, 42, emdash_wid, window_name="proj")
+        assert thread_router.get_window_for_thread(100, 42) == emdash_wid
 
     def test_iter_includes_foreign_bindings(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        mgr.bind_thread(100, 2, "emdash-claude-main-abc:@0")
-        result = set(mgr.iter_thread_bindings())
+        thread_router.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 2, "emdash-claude-main-abc:@0")
+        result = set(thread_router.iter_thread_bindings())
         assert (100, 2, "emdash-claude-main-abc:@0") in result
 
 
@@ -330,8 +331,8 @@ class TestResolveStaleIdsEmdash:
         self, mgr: SessionManager, monkeypatch
     ) -> None:
         emdash_wid = "emdash-claude-main-abc:@0"
-        mgr.bind_thread(100, 1, "@1", window_name="alive-proj")
-        mgr.bind_thread(100, 2, emdash_wid, window_name="emdash-proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="alive-proj")
+        thread_router.bind_thread(100, 2, emdash_wid, window_name="emdash-proj")
         mgr.window_states[emdash_wid] = WindowState(
             session_id="s-emdash", cwd="/tmp/emdash", external=True
         )
@@ -349,5 +350,5 @@ class TestResolveStaleIdsEmdash:
             await mgr.resolve_stale_ids()
 
         # Foreign binding preserved (not re-resolved)
-        assert mgr.get_window_for_thread(100, 2) == emdash_wid
+        assert thread_router.get_window_for_thread(100, 2) == emdash_wid
         assert emdash_wid in mgr.window_states

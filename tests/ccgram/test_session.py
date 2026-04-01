@@ -4,13 +4,16 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ccgram.session import APPROVAL_MODES, SessionManager, WindowState
+from ccgram.session import SessionManager
 from ccgram.thread_router import thread_router
+from ccgram.user_preferences import user_preferences
+from ccgram.window_state_store import APPROVAL_MODES, WindowState, window_store
 
 
 @pytest.fixture
 def mgr(monkeypatch) -> SessionManager:
     thread_router.reset()
+    window_store.window_states.clear()
     monkeypatch.setattr(SessionManager, "_load_state", lambda self: None)
     monkeypatch.setattr(SessionManager, "_save_state", lambda self: None)
     return SessionManager()
@@ -18,40 +21,40 @@ def mgr(monkeypatch) -> SessionManager:
 
 class TestThreadBindings:
     def test_bind_and_get(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        assert mgr.get_window_for_thread(100, 1) == "@1"
+        thread_router.bind_thread(100, 1, "@1")
+        assert thread_router.get_window_for_thread(100, 1) == "@1"
 
     def test_bind_unbind_get_returns_none(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        mgr.unbind_thread(100, 1)
-        assert mgr.get_window_for_thread(100, 1) is None
+        thread_router.bind_thread(100, 1, "@1")
+        thread_router.unbind_thread(100, 1)
+        assert thread_router.get_window_for_thread(100, 1) is None
 
     def test_unbind_nonexistent_returns_none(self, mgr: SessionManager) -> None:
-        assert mgr.unbind_thread(100, 999) is None
+        assert thread_router.unbind_thread(100, 999) is None
 
     def test_get_thread_for_window(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 42, "@5")
-        assert mgr.get_thread_for_window(100, "@5") == 42
+        thread_router.bind_thread(100, 42, "@5")
+        assert thread_router.get_thread_for_window(100, "@5") == 42
 
     def test_iter_thread_bindings(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        mgr.bind_thread(100, 2, "@2")
-        mgr.bind_thread(200, 3, "@3")
-        result = set(mgr.iter_thread_bindings())
+        thread_router.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 2, "@2")
+        thread_router.bind_thread(200, 3, "@3")
+        result = set(thread_router.iter_thread_bindings())
         assert result == {(100, 1, "@1"), (100, 2, "@2"), (200, 3, "@3")}
 
 
 class TestResolveChatId:
     def test_with_stored_group_id(self, mgr: SessionManager) -> None:
-        mgr.set_group_chat_id(100, 1, -999)
-        assert mgr.resolve_chat_id(100, 1) == -999
+        thread_router.set_group_chat_id(100, 1, -999)
+        assert thread_router.resolve_chat_id(100, 1) == -999
 
     def test_without_group_id_falls_back(self, mgr: SessionManager) -> None:
-        assert mgr.resolve_chat_id(100, 1) == 100
+        assert thread_router.resolve_chat_id(100, 1) == 100
 
     def test_none_thread_id_falls_back(self, mgr: SessionManager) -> None:
-        mgr.set_group_chat_id(100, 1, -999)
-        assert mgr.resolve_chat_id(100) == 100
+        thread_router.set_group_chat_id(100, 1, -999)
+        assert thread_router.resolve_chat_id(100) == 100
 
 
 class TestWindowState:
@@ -76,14 +79,14 @@ class TestWindowState:
 
 class TestResolveWindowForThread:
     def test_none_thread_id_returns_none(self, mgr: SessionManager) -> None:
-        assert mgr.resolve_window_for_thread(100, None) is None
+        assert thread_router.resolve_window_for_thread(100, None) is None
 
     def test_unbound_thread_returns_none(self, mgr: SessionManager) -> None:
-        assert mgr.resolve_window_for_thread(100, 42) is None
+        assert thread_router.resolve_window_for_thread(100, 42) is None
 
     def test_bound_thread_returns_window(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 42, "@3")
-        assert mgr.resolve_window_for_thread(100, 42) == "@3"
+        thread_router.bind_thread(100, 42, "@3")
+        assert thread_router.resolve_window_for_thread(100, 42) == "@3"
 
 
 class TestDisplayNames:
@@ -100,11 +103,11 @@ class TestDisplayNames:
         assert mgr.get_display_name("@1") == "new-name"
 
     def test_bind_thread_sets_display_name(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
         assert mgr.get_display_name("@1") == "proj"
 
     def test_bind_thread_without_name_no_display(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         assert mgr.get_display_name("@1") == "@1"
 
 
@@ -128,19 +131,19 @@ class TestFindUsersForSession:
         return WindowState(session_id=session_id, cwd="/tmp")
 
     def test_returns_matching_users(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         mgr.window_states["@1"] = self._ws("sid-1")
         result = mgr.find_users_for_session("sid-1")
         assert result == [(100, "@1", 1)]
 
     def test_no_match_returns_empty(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         mgr.window_states["@1"] = self._ws("sid-1")
         assert mgr.find_users_for_session("sid-other") == []
 
     def test_multiple_users_same_session(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        mgr.bind_thread(200, 2, "@2")
+        thread_router.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(200, 2, "@2")
         mgr.window_states["@1"] = self._ws("sid-shared")
         mgr.window_states["@2"] = self._ws("sid-shared")
         result = mgr.find_users_for_session("sid-shared")
@@ -148,7 +151,7 @@ class TestFindUsersForSession:
         assert {r[0] for r in result} == {100, 200}
 
     def test_ignores_windows_without_state(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         assert mgr.find_users_for_session("sid-1") == []
 
 
@@ -423,7 +426,7 @@ class TestGlobFallbackCwdUpdate:
         from ccgram.providers.claude import ClaudeProvider
 
         monkeypatch.setattr(
-            "ccgram.session.get_provider_for_window",
+            "ccgram.session_resolver.get_provider_for_window",
             lambda _wid: ClaudeProvider(),
         )
 
@@ -538,13 +541,13 @@ class TestApprovalMode:
 
 class TestGetWindowForChatThread:
     def test_resolves_bound_window_for_group_topic(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 42, "@9")
-        mgr.set_group_chat_id(100, 42, -100123)
+        thread_router.bind_thread(100, 42, "@9")
+        thread_router.set_group_chat_id(100, 42, -100123)
         assert mgr.get_window_for_chat_thread(-100123, 42) == "@9"
 
     def test_returns_none_when_chat_mismatch(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 42, "@9")
-        mgr.set_group_chat_id(100, 42, -100123)
+        thread_router.bind_thread(100, 42, "@9")
+        thread_router.set_group_chat_id(100, 42, -100123)
         assert mgr.get_window_for_chat_thread(-100999, 42) is None
 
 
@@ -599,7 +602,7 @@ class TestPruneStaleState:
         assert "@2" not in thread_router.window_display_names
 
     def test_keeps_display_name_if_bound(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@2", window_name="bound-proj")
+        thread_router.bind_thread(100, 1, "@2", window_name="bound-proj")
         changed = mgr.prune_stale_state(live_window_ids=set())
         assert changed is False
         assert "@2" in thread_router.window_display_names
@@ -612,17 +615,17 @@ class TestPruneStaleState:
         assert "@3" in thread_router.window_display_names
 
     def test_removes_orphaned_group_chat_ids(self, mgr: SessionManager) -> None:
-        mgr.set_group_chat_id(100, 1, -999)
-        mgr.set_group_chat_id(100, 2, -888)
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.set_group_chat_id(100, 1, -999)
+        thread_router.set_group_chat_id(100, 2, -888)
+        thread_router.bind_thread(100, 1, "@1")
         changed = mgr.prune_stale_state(live_window_ids={"@1"})
         assert changed is True
         assert "100:1" in thread_router.group_chat_ids
         assert "100:2" not in thread_router.group_chat_ids
 
     def test_noop_when_nothing_stale(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
-        mgr.set_group_chat_id(100, 1, -999)
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.set_group_chat_id(100, 1, -999)
         changed = mgr.prune_stale_state(live_window_ids={"@1"})
         assert changed is False
 
@@ -637,36 +640,36 @@ class TestPruneStaleState:
 
 class TestUnbindThreadCleanup:
     def test_cleans_up_group_chat_id(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        mgr.set_group_chat_id(100, 1, -999)
-        mgr.unbind_thread(100, 1)
+        thread_router.bind_thread(100, 1, "@1")
+        thread_router.set_group_chat_id(100, 1, -999)
+        thread_router.unbind_thread(100, 1)
         assert "100:1" not in thread_router.group_chat_ids
 
     def test_removes_display_name_when_no_refs(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
         assert "@1" in thread_router.window_display_names
-        mgr.unbind_thread(100, 1)
+        thread_router.unbind_thread(100, 1)
         assert "@1" not in thread_router.window_display_names
 
     def test_keeps_display_name_when_other_thread_bound(
         self, mgr: SessionManager
     ) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
-        mgr.bind_thread(200, 2, "@1")
-        mgr.unbind_thread(100, 1)
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(200, 2, "@1")
+        thread_router.unbind_thread(100, 1)
         assert "@1" in thread_router.window_display_names
 
     def test_keeps_display_name_when_window_state_exists(
         self, mgr: SessionManager
     ) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
         mgr.window_states["@1"] = WindowState(session_id="sid")
-        mgr.unbind_thread(100, 1)
+        thread_router.unbind_thread(100, 1)
         assert "@1" in thread_router.window_display_names
 
     def test_group_chat_id_absent_is_safe(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
-        result = mgr.unbind_thread(100, 1)
+        thread_router.bind_thread(100, 1, "@1")
+        result = thread_router.unbind_thread(100, 1)
         assert result == "@1"
 
 
@@ -700,7 +703,7 @@ class TestResolveSessionForWindow:
             provider_name="gemini",
         )
         monkeypatch.setattr(
-            "ccgram.session.get_provider_for_window",
+            "ccgram.session_resolver.get_provider_for_window",
             lambda _wid: SimpleNamespace(
                 capabilities=SimpleNamespace(supports_hook=False)
             ),
@@ -723,7 +726,7 @@ class TestResolveSessionForWindow:
             provider_name="codex",
         )
         monkeypatch.setattr(
-            "ccgram.session.get_provider_for_window",
+            "ccgram.session_resolver.get_provider_for_window",
             lambda _wid: SimpleNamespace(
                 capabilities=SimpleNamespace(supports_hook=False)
             ),
@@ -749,7 +752,7 @@ class TestResolveSessionForWindow:
             provider_name="claude",
         )
         monkeypatch.setattr(
-            "ccgram.session.get_provider_for_window",
+            "ccgram.session_resolver.get_provider_for_window",
             lambda _wid: SimpleNamespace(
                 capabilities=SimpleNamespace(supports_hook=True)
             ),
@@ -836,7 +839,7 @@ class TestWriteHooklessSessionMap:
 
 class TestAuditState:
     def test_clean_state(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         thread_router.window_display_names["@1"] = "proj"
         result = mgr.audit_state(live_window_ids={"@1"}, live_windows=[("@1", "proj")])
         assert not result.has_issues
@@ -844,7 +847,7 @@ class TestAuditState:
         assert result.live_binding_count == 1
 
     def test_ghost_binding(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@7")
+        thread_router.bind_thread(100, 1, "@7")
         thread_router.window_display_names["@7"] = "dead"
         result = mgr.audit_state(live_window_ids=set(), live_windows=[])
         assert result.has_issues
@@ -870,14 +873,14 @@ class TestAuditState:
         assert orphans[0].fixable
 
     def test_stale_offset(self, mgr: SessionManager) -> None:
-        mgr.user_window_offsets[100] = {"@99": 1234}
+        user_preferences.user_window_offsets[100] = {"@99": 1234}
         result = mgr.audit_state(live_window_ids=set(), live_windows=[])
         stale = [i for i in result.issues if i.category == "stale_offset"]
         assert len(stale) == 1
         assert stale[0].fixable
 
     def test_orphaned_window(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         mgr.window_states["@5"] = WindowState(session_id="s1", cwd="/tmp")
         result = mgr.audit_state(
             live_window_ids={"@1", "@5"},
@@ -889,7 +892,7 @@ class TestAuditState:
         assert orphans[0].fixable
 
     def test_orphaned_window_ignores_unknown(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         result = mgr.audit_state(
             live_window_ids={"@1", "@5"},
             live_windows=[("@1", "proj"), ("@5", "manual-shell")],
@@ -922,20 +925,20 @@ class TestAuditState:
 
 class TestPruneStaleOffsets:
     def test_removes_unknown_windows(self, mgr: SessionManager) -> None:
-        mgr.user_window_offsets[100] = {"@1": 100, "@99": 200}
+        user_preferences.user_window_offsets[100] = {"@1": 100, "@99": 200}
         changed = mgr.prune_stale_offsets(known_window_ids={"@1"})
         assert changed
-        assert "@99" not in mgr.user_window_offsets[100]
-        assert "@1" in mgr.user_window_offsets[100]
+        assert "@99" not in user_preferences.user_window_offsets[100]
+        assert "@1" in user_preferences.user_window_offsets[100]
 
     def test_removes_empty_user_entry(self, mgr: SessionManager) -> None:
-        mgr.user_window_offsets[100] = {"@99": 200}
+        user_preferences.user_window_offsets[100] = {"@99": 200}
         changed = mgr.prune_stale_offsets(known_window_ids=set())
         assert changed
-        assert 100 not in mgr.user_window_offsets
+        assert 100 not in user_preferences.user_window_offsets
 
     def test_noop_when_nothing_stale(self, mgr: SessionManager) -> None:
-        mgr.user_window_offsets[100] = {"@1": 100}
+        user_preferences.user_window_offsets[100] = {"@1": 100}
         changed = mgr.prune_stale_offsets(known_window_ids={"@1"})
         assert not changed
 
@@ -956,7 +959,7 @@ class TestPruneStaleWindowStates:
 
     def test_keeps_bound_states(self, mgr: SessionManager) -> None:
         mgr.window_states["@1"] = WindowState(session_id="s1", cwd="/tmp")
-        mgr.bind_thread(100, 1, "@1")
+        thread_router.bind_thread(100, 1, "@1")
         changed = mgr.prune_stale_window_states(live_window_ids=set())
         assert not changed
         assert "@1" in mgr.window_states
@@ -997,8 +1000,8 @@ class TestResolveStaleIdsPreservesDeadBindings:
         monkeypatch.setattr("ccgram.session.config.tmux_session_name", "ccgram")
 
     async def test_preserves_dead_window_binding(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="alive-proj")
-        mgr.bind_thread(100, 2, "@2", window_name="dead-proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="alive-proj")
+        thread_router.bind_thread(100, 2, "@2", window_name="dead-proj")
         mgr.window_states["@2"] = WindowState(cwd="/tmp/dead", provider_name="claude")
 
         alive = SimpleNamespace(window_id="@1", window_name="alive-proj")
@@ -1009,12 +1012,12 @@ class TestResolveStaleIdsPreservesDeadBindings:
         ):
             await mgr.resolve_stale_ids()
 
-        assert mgr.get_window_for_thread(100, 2) == "@2"
+        assert thread_router.get_window_for_thread(100, 2) == "@2"
         assert "@2" in mgr.window_states
         assert mgr.window_states["@2"].cwd == "/tmp/dead"
 
     async def test_alive_bindings_unchanged(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
         alive = SimpleNamespace(window_id="@1", window_name="proj")
         from ccgram.tmux_manager import tmux_manager
 
@@ -1023,10 +1026,10 @@ class TestResolveStaleIdsPreservesDeadBindings:
         ):
             await mgr.resolve_stale_ids()
 
-        assert mgr.get_window_for_thread(100, 1) == "@1"
+        assert thread_router.get_window_for_thread(100, 1) == "@1"
 
     async def test_dead_window_state_preserved(self, mgr: SessionManager) -> None:
-        mgr.bind_thread(100, 1, "@1", window_name="proj")
+        thread_router.bind_thread(100, 1, "@1", window_name="proj")
         mgr.window_states["@1"] = WindowState(cwd="/my/project", provider_name="codex")
         from ccgram.tmux_manager import tmux_manager
 
@@ -1036,3 +1039,50 @@ class TestResolveStaleIdsPreservesDeadBindings:
         assert "@1" in mgr.window_states
         assert mgr.window_states["@1"].cwd == "/my/project"
         assert mgr.window_states["@1"].provider_name == "codex"
+
+
+class TestExportWindowInfo:
+    def test_returns_dict(self, tmp_path, monkeypatch) -> None:
+        from ccgram.msg_discovery import export_window_info
+
+        state_dir = tmp_path / "ccgram"
+        state_dir.mkdir()
+        (state_dir / "state.json").write_text(
+            json.dumps(
+                {
+                    "window_states": {
+                        "@0": {
+                            "session_id": "s1",
+                            "cwd": "/home/user/proj",
+                            "window_name": "proj",
+                            "provider_name": "claude",
+                            "external": False,
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.setattr("ccgram.utils.ccgram_dir", lambda: state_dir)
+        result = export_window_info()
+        assert "@0" in result
+        assert result["@0"].cwd == "/home/user/proj"
+        assert result["@0"].window_name == "proj"
+        assert result["@0"].provider_name == "claude"
+        assert result["@0"].external is False
+
+    def test_empty_state(self, tmp_path, monkeypatch) -> None:
+        from ccgram.msg_discovery import export_window_info
+
+        state_dir = tmp_path / "empty"
+        state_dir.mkdir()
+        monkeypatch.setattr("ccgram.utils.ccgram_dir", lambda: state_dir)
+        assert export_window_info() == {}
+
+    def test_malformed_json(self, tmp_path, monkeypatch) -> None:
+        from ccgram.msg_discovery import export_window_info
+
+        state_dir = tmp_path / "ccgram"
+        state_dir.mkdir()
+        (state_dir / "state.json").write_text("{ invalid json")
+        monkeypatch.setattr("ccgram.utils.ccgram_dir", lambda: state_dir)
+        assert export_window_info() == {}

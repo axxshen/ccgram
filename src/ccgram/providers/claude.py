@@ -24,7 +24,7 @@ from ccgram.terminal_parser import (
     extract_bash_output,
     extract_interactive_content,
     format_status_display,
-    parse_status_line,
+    parse_status_block,
 )
 from ccgram.transcript_parser import TranscriptParser
 
@@ -37,7 +37,16 @@ class ClaudeProvider:
         launch_command="claude",
         supports_hook=True,
         supports_hook_events=True,
-        hook_event_types=("Notification", "Stop", "SubagentStart", "SubagentStop"),
+        hook_event_types=(
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "SessionEnd",
+            "SubagentStart",
+            "SubagentStop",
+            "TeammateIdle",
+            "TaskCompleted",
+        ),
         supports_resume=True,
         supports_continue=True,
         supports_structured_transcript=True,
@@ -143,11 +152,12 @@ class ClaudeProvider:
                 ui_type=interactive.name,
             )
 
-        raw_status = parse_status_line(pane_text)
+        raw_status = parse_status_block(pane_text)
         if raw_status:
+            headline = raw_status.split("\n", 1)[0]
             return StatusUpdate(
                 raw_text=raw_status,
-                display_label=format_status_display(raw_status),
+                display_label=format_status_display(headline),
             )
 
         return None

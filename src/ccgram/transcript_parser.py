@@ -220,6 +220,12 @@ class TranscriptParser:
             summary = input_data.get("pattern", "")
         elif name == "Task":
             summary = input_data.get("description", "")
+        elif name == "TaskCreate":
+            summary = cls._summarize_task_create(input_data)
+        elif name == "TaskUpdate":
+            summary = cls._summarize_task_update(input_data)
+        elif name == "TaskList":
+            summary = cls._summarize_task_list(input_data)
         elif name == "WebFetch":
             summary = input_data.get("url", "")
         elif name == "WebSearch":
@@ -254,6 +260,42 @@ class TranscriptParser:
                 summary = summary[: cls._MAX_SUMMARY_LENGTH] + "…"
             return f"{prefix}**{name}** `{summary}`"
         return f"{prefix}**{name}**"
+
+    @staticmethod
+    def _summarize_task_create(input_data: dict[str, Any]) -> str:
+        """Build a stable summary for TaskCreate."""
+        return (
+            input_data.get("subject")
+            or input_data.get("activeForm")
+            or input_data.get("description")
+            or ""
+        )
+
+    @staticmethod
+    def _summarize_task_update(input_data: dict[str, Any]) -> str:
+        """Build a stable summary for TaskUpdate."""
+        label = (
+            input_data.get("subject")
+            or input_data.get("activeForm")
+            or input_data.get("description")
+            or input_data.get("taskId")
+            or ""
+        )
+        status = input_data.get("status")
+        if isinstance(status, str) and status:
+            status_label = status.replace("_", " ")
+            if label:
+                return f"{label} -> {status_label}"
+            return status_label
+        return label
+
+    @staticmethod
+    def _summarize_task_list(input_data: dict[str, Any]) -> str:
+        """Build a stable summary for TaskList."""
+        tasks = input_data.get("tasks")
+        if isinstance(tasks, list):
+            return f"{len(tasks)} task(s)"
+        return "refresh"
 
     @staticmethod
     def extract_tool_result_text(content: list | Any) -> str:

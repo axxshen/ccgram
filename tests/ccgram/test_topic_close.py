@@ -31,10 +31,15 @@ class TestTopicClosedHandler:
         await topic_closed_handler(update, ctx)
 
         mock_tr.get_window_for_thread.assert_called_once_with(1, 42)
-        mock_tr.unbind_thread.assert_called_once_with(1, 42)
         mock_clear.assert_called_once_with(
-            1, 42, ctx.bot, ctx.user_data, window_id="@0"
+            1,
+            42,
+            ctx.bot,
+            ctx.user_data,
+            window_id="@0",
+            window_dead=False,
         )
+        mock_tr.unbind_thread.assert_called_once_with(1, 42)
 
     @_PATCH_ALLOWED
     @patch("ccgram.bot.clear_topic_state", new_callable=AsyncMock)

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..providers.base import StatusUpdate
+from ..topic_state_registry import topic_state
 
 if TYPE_CHECKING:
     from ..screen_buffer import ScreenBuffer
@@ -27,22 +28,22 @@ logger = structlog.get_logger()
 # ── Constants ───────────────────────────────────────────────────────────
 
 # Transcript activity heuristic threshold (seconds).
-_ACTIVITY_THRESHOLD = 10.0
+ACTIVITY_THRESHOLD = 10.0
 
 # Startup timeout before transitioning to idle (seconds).
-_STARTUP_TIMEOUT = 30.0
+STARTUP_TIMEOUT = 30.0
 
 # RC debounce: require RC absent for this long before clearing badge.
-_RC_DEBOUNCE_SECONDS = 3.0
+RC_DEBOUNCE_SECONDS = 3.0
 
 # Consecutive topic probe failure threshold.
-_MAX_PROBE_FAILURES = 3
+MAX_PROBE_FAILURES = 3
 
 # Typing indicator throttle interval (seconds).
-_TYPING_INTERVAL = 4.0
+TYPING_INTERVAL = 4.0
 
 # Pane count cache TTL for multi-pane scanning (seconds).
-_PANE_COUNT_TTL = 5.0
+PANE_COUNT_TTL = 5.0
 
 # Shell commands indicating agent has exited.
 SHELL_COMMANDS = frozenset({"bash", "zsh", "fish", "sh", "dash", "tcsh", "csh", "ksh"})
@@ -177,9 +178,111 @@ class TerminalStatusStrategy:
             now = time.monotonic()
             if ws.rc_off_since is None:
                 ws.rc_off_since = now
-            elif now - ws.rc_off_since >= _RC_DEBOUNCE_SECONDS:
+            elif now - ws.rc_off_since >= RC_DEBOUNCE_SECONDS:
                 ws.rc_active = False
                 ws.rc_off_since = None
+
+    def reset_probe_failures(self, window_id: str) -> None:
+        """Reset probe failure counter for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.probe_failures = 0
+
+    def clear_seen_status(self, window_id: str) -> None:
+        """Clear startup status tracking for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.has_seen_status = False
+            ws.startup_time = None
+
+    def set_unbound_timer(self, window_id: str, ts: float) -> None:
+        """Set unbound timer for a window (creates state if needed)."""
+        ws = self.get_state(window_id)
+        ws.unbound_timer = ts
+
+    def clear_unbound_timer(self, window_id: str) -> None:
+        """Clear unbound timer for a single window."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.unbound_timer = None
+
+    def reset_all_probe_failures(self) -> None:
+        """Reset probe failure counters for all windows."""
+        for ws in self._states.values():
+            ws.probe_failures = 0
+
+    def reset_all_seen_status(self) -> None:
+        """Reset startup status tracking for all windows."""
+        for ws in self._states.values():
+            ws.has_seen_status = False
+            ws.startup_time = None
+
+    def reset_all_unbound_timers(self) -> None:
+        """Reset unbound timers for all windows."""
+        for ws in self._states.values():
+            ws.unbound_timer = None
+
+    def cancel_startup_timer(self, window_id: str) -> None:
+        """Clear startup grace period without touching has_seen_status."""
+        ws = self._states.get(window_id)
+        if ws:
+            ws.startup_time = None
+
+    def begin_startup_timer(self, window_id: str, now: float) -> None:
+        """Record the moment a window's startup grace period begins."""
+        self.get_state(window_id).startup_time = now
+
+    def update_pane_count_cache(self, window_id: str, count: int) -> None:
+        """Record freshly-fetched pane count with TTL expiry."""
+        self.get_state(window_id).pane_count_cache = (
+            count,
+            time.monotonic() + PANE_COUNT_TTL,
+        )
+
+    def check_seen_status(self, window_id: str) -> bool:
+        """Return True if this window has received at least one status update."""
+        ws = self._states.get(window_id)
+        return ws.has_seen_status if ws else False
+
+    def get_rendered_text(self, window_id: str, fallback: str) -> str:
+        """Return last rendered text if available, otherwise fallback."""
+        ws = self._states.get(window_id)
+        if ws and ws.last_rendered_text is not None:
+            return ws.last_rendered_text
+        return fallback
+
+    def is_recently_active(self, window_id: str, last_activity: float | None) -> bool:
+        """Check if recent transcript activity indicates an active agent.
+
+        Side effect: marks window as having seen status if active.
+        """
+        if not last_activity:
+            return False
+        if (time.monotonic() - last_activity) < ACTIVITY_THRESHOLD:
+            self.mark_seen_status(window_id)
+            return True
+        return False
+
+    def is_startup_expired(self, window_id: str) -> bool:
+        """Check if a window's startup grace period has elapsed."""
+        ws = self._states.get(window_id)
+        if not ws or ws.startup_time is None:
+            return False
+        return (time.monotonic() - ws.startup_time) >= STARTUP_TIMEOUT
+
+    def is_single_pane_cached(self, window_id: str) -> bool:
+        """Check if pane count cache confirms single pane (skip subprocess)."""
+        ws = self._states.get(window_id)
+        if not ws or not ws.pane_count_cache:
+            return False
+        count, expiry = ws.pane_count_cache
+        return count <= 1 and expiry > time.monotonic()
+
+    def mark_seen_status(self, window_id: str) -> None:
+        """Mark a window as having seen its first status update."""
+        ws = self.get_state(window_id)
+        ws.has_seen_status = True
+        ws.startup_time = None
 
     def get_screen_buffer(
         self, window_id: str, columns: int, rows: int
@@ -214,7 +317,7 @@ class TerminalStatusStrategy:
             detect_remote_control,
             format_status_display,
             parse_from_screen,
-            parse_status_from_screen,
+            parse_status_block_from_screen,
         )
 
         if (
@@ -255,11 +358,12 @@ class TerminalStatusStrategy:
             ws.last_pyte_result = result
             return result
 
-        raw_status = parse_status_from_screen(buf)
+        raw_status = parse_status_block_from_screen(buf)
         if raw_status:
+            headline = raw_status.split("\n", 1)[0]
             result = StatusUpdate(
                 raw_text=raw_status,
-                display_label=format_status_display(raw_status),
+                display_label=format_status_display(headline),
             )
             ws.last_pane_hash = content_hash
             ws.last_pyte_result = result
@@ -378,8 +482,7 @@ class TopicLifecycleStrategy:
         """Reset all autoclose tracking (for testing)."""
         for ts in self._states.values():
             ts.autoclose = None
-        for ws in self._terminal._states.values():
-            ws.unbound_timer = None
+        self._terminal.reset_all_unbound_timers()
 
     def clear_dead_notification(self, user_id: int, thread_id: int) -> None:
         """Remove dead notification tracking for a topic."""
@@ -393,14 +496,11 @@ class TopicLifecycleStrategy:
 
     def clear_probe_failures(self, window_id: str) -> None:
         """Reset probe failure counter for a window."""
-        ws = self._terminal._states.get(window_id)
-        if ws:
-            ws.probe_failures = 0
+        self._terminal.reset_probe_failures(window_id)
 
     def reset_probe_failures_state(self) -> None:
         """Reset all probe failure tracking (for testing)."""
-        for ws in self._terminal._states.values():
-            ws.probe_failures = 0
+        self._terminal.reset_all_probe_failures()
 
     def clear_typing_state(self, user_id: int, thread_id: int) -> None:
         """Clear typing indicator throttle for a topic."""
@@ -415,23 +515,34 @@ class TopicLifecycleStrategy:
 
     def clear_seen_status(self, window_id: str) -> None:
         """Clear startup status tracking for a window."""
-        ws = self._terminal._states.get(window_id)
-        if ws:
-            ws.has_seen_status = False
-            ws.startup_time = None
+        self._terminal.clear_seen_status(window_id)
 
     def reset_seen_status_state(self) -> None:
         """Reset all startup status tracking (for testing)."""
-        for ws in self._terminal._states.values():
-            ws.has_seen_status = False
-            ws.startup_time = None
+        self._terminal.reset_all_seen_status()
+
+    def record_typing_sent(self, user_id: int, thread_id: int) -> None:
+        """Stamp the current time as the last typing indicator sent."""
+        self.get_state(user_id, thread_id).last_typing_sent = time.monotonic()
+
+    def is_typing_throttled(self, user_id: int, thread_id: int) -> bool:
+        """Check if typing indicator was sent too recently."""
+        ts = self._states.get((user_id, thread_id))
+        if not ts or ts.last_typing_sent is None:
+            return False
+        return (time.monotonic() - ts.last_typing_sent) < TYPING_INTERVAL
+
+    def should_skip_probe(self, window_id: str) -> bool:
+        """Check if a window has exceeded the probe failure threshold."""
+        ws = self._terminal.get_state(window_id)
+        return ws.probe_failures >= MAX_PROBE_FAILURES
 
     def record_probe_failure(self, window_id: str) -> int:
         """Increment probe failure counter; log once when threshold is reached."""
         ws = self._terminal.get_state(window_id)
         ws.probe_failures += 1
         count = ws.probe_failures
-        if count == _MAX_PROBE_FAILURES:
+        if count == MAX_PROBE_FAILURES:
             logger.info(
                 "Suspending topic probe for %s after %d consecutive failures",
                 window_id,
@@ -451,6 +562,7 @@ lifecycle_strategy = TopicLifecycleStrategy(terminal_strategy)
 # Thin delegates so consumers don't need to know about strategy internals.
 
 
+@topic_state.register("window")
 def clear_window_poll_state(window_id: str) -> None:
     """Remove all polling state for a window."""
     terminal_strategy.clear_state(window_id)
@@ -472,6 +584,7 @@ def is_rc_active(window_id: str) -> bool:
     return terminal_strategy.is_rc_active(window_id)
 
 
+@topic_state.register("topic")
 def clear_topic_poll_state(user_id: int, thread_id: int) -> None:
     """Remove all polling state for a topic."""
     lifecycle_strategy.clear_state(user_id, thread_id)
@@ -487,6 +600,7 @@ def reset_autoclose_state() -> None:
     lifecycle_strategy.reset_autoclose_state()
 
 
+@topic_state.register("topic")
 def clear_dead_notification(user_id: int, thread_id: int) -> None:
     """Remove dead notification tracking for a topic (called on cleanup)."""
     lifecycle_strategy.clear_dead_notification(user_id, thread_id)
@@ -532,6 +646,7 @@ def has_pane_alert(pane_id: str) -> bool:
     return interactive_strategy.has_pane_alert(pane_id)
 
 
+@topic_state.register("window")
 def clear_pane_alerts(window_id: str) -> None:
     """Remove pane alert state for a specific window only."""
     interactive_strategy.clear_pane_alerts(window_id)

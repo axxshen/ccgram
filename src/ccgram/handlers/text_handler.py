@@ -38,11 +38,12 @@ from .message_sender import (
 )
 from .recovery_callbacks import build_recovery_keyboard
 from .polling_strategies import clear_probe_failures
+from ..topic_state_registry import topic_state
 from .user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT, RECOVERY_WINDOW_ID
 from ..session import session_manager
 from ..thread_router import thread_router
 from ..providers import get_provider_for_window
-from ..tmux_manager import tmux_manager
+from ..tmux_manager import send_to_window, tmux_manager
 from ..utils import handle_general_topic_message, is_general_topic, task_done_callback
 
 logger = structlog.get_logger()
@@ -54,7 +55,8 @@ _BASH_OUTPUT_LIMIT = 3800
 _bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
 
 
-def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
+@topic_state.register("topic")
+def cancel_bash_capture(user_id: int, thread_id: int) -> None:
     """Cancel any running bash capture for this topic."""
     key = (user_id, thread_id)
     task = _bash_capture_tasks.pop(key, None)
@@ -320,11 +322,11 @@ async def _forward_message(
     await enqueue_status_update(bot, user_id, window_id, None, thread_id)
 
     # Cancel any running bash capture — new message pushes pane content down
-    _cancel_bash_capture(user_id, thread_id)
+    cancel_bash_capture(user_id, thread_id)
 
     clear_probe_failures(window_id)
 
-    success, err_message = await session_manager.send_to_window(window_id, text)
+    success, err_message = await send_to_window(window_id, text)
     if not success:
         await safe_reply(message, f"\u274c {err_message}")
         return
@@ -405,7 +407,7 @@ async def handle_text_message(
 
     # Shell provider: route through LLM or raw execution
     provider = get_provider_for_window(window_id)
-    if provider.capabilities.name == "shell":
+    if not provider.capabilities.supports_mailbox_delivery:
         from .shell_commands import handle_shell_message
 
         await handle_shell_message(

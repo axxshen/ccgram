@@ -99,6 +99,7 @@ from .handlers.file_handler import handle_document_message, handle_photo_message
 from .handlers.voice_handler import handle_voice_message
 from .handlers.text_handler import handle_text_message
 from .session import session_manager
+from .user_preferences import user_preferences
 from .session_monitor import NewMessage, NewWindowEvent, SessionMonitor
 from .thread_router import thread_router
 from .telegram_request import ResilientPollingHTTPXRequest
@@ -227,11 +228,18 @@ async def topic_closed_handler(
     window_id = thread_router.get_window_for_thread(user.id, thread_id)
     if window_id:
         display = thread_router.get_display_name(window_id)
-        thread_router.unbind_thread(user.id, thread_id)
-        # Clean up all memory state for this topic
+        # Clean up BEFORE unbind — resolve_chat_id needs group_chat_ids
+        # which unbind_thread deletes.  window_dead=False because the
+        # window stays alive for rebinding.
         await clear_topic_state(
-            user.id, thread_id, context.bot, context.user_data, window_id=window_id
+            user.id,
+            thread_id,
+            context.bot,
+            context.user_data,
+            window_id=window_id,
+            window_dead=False,
         )
+        thread_router.unbind_thread(user.id, thread_id)
         logger.info(
             "Topic closed: window %s unbound (kept alive for rebinding, user=%d, thread=%d)",
             display,
@@ -332,7 +340,12 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # (clear_topic_state only clears the tracking dict, leaving a ghost)
     await enqueue_status_update(context.bot, user.id, window_id, None, thread_id)
     await clear_topic_state(
-        user.id, thread_id, context.bot, context.user_data, window_id=window_id
+        user.id,
+        thread_id,
+        context.bot,
+        context.user_data,
+        window_id=window_id,
+        window_dead=False,
     )
     thread_router.unbind_thread(user.id, thread_id)
     await safe_reply(
@@ -719,7 +732,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 if session and session.file_path:
                     try:
                         file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
+                        user_preferences.update_user_window_offset(
                             user_id, window_id, file_size
                         )
                     except OSError:
@@ -750,6 +763,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 window_id=window_id,
                 parts=parts,
                 tool_use_id=msg.tool_use_id,
+                tool_name=msg.tool_name,
                 content_type=msg.content_type,
                 text=msg.text,
                 thread_id=thread_id,
@@ -761,7 +775,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             if session and session.file_path:
                 try:
                     file_size = Path(session.file_path).stat().st_size
-                    session_manager.update_user_window_offset(
+                    user_preferences.update_user_window_offset(
                         user_id, window_id, file_size
                     )
                 except OSError:
@@ -853,7 +867,8 @@ async def post_init(application: Application) -> None:
     monitor.set_new_window_callback(new_window_callback)
 
     # Wire hook event dispatcher for structured Claude Code events
-    from ccgram.handlers.hook_events import HookEvent, dispatch_hook_event
+    from ccgram.providers.base import HookEvent
+    from ccgram.handlers.hook_events import dispatch_hook_event
 
     async def hook_event_callback(event: HookEvent) -> None:
         await dispatch_hook_event(event, application.bot)
@@ -915,6 +930,11 @@ async def post_shutdown(_application: Application) -> None:
 
     # Stop all queue workers after monitor is stopped
     await shutdown_workers()
+
+    # Sweep expired mailbox messages before final state flush
+    from .mailbox import Mailbox
+
+    Mailbox(config.mailbox_dir).sweep()
 
     # Flush debounced state to disk AFTER workers/monitor stop (captures final mutations)
     session_manager.flush_state()

@@ -8,12 +8,12 @@ import pytest
 
 from ccgram.handlers.polling_strategies import (
     InteractiveUIStrategy,
+    MAX_PROBE_FAILURES,
+    RC_DEBOUNCE_SECONDS,
     TerminalStatusStrategy,
     TopicLifecycleStrategy,
     TopicPollState,
     WindowPollState,
-    _MAX_PROBE_FAILURES,
-    _RC_DEBOUNCE_SECONDS,
     is_shell_prompt,
 )
 
@@ -79,7 +79,7 @@ class TestTerminalStatusStrategy:
 
     def test_update_rc_state_debounce_completes(self):
         ws = WindowPollState(rc_active=True)
-        ws.rc_off_since = time.monotonic() - _RC_DEBOUNCE_SECONDS - 1
+        ws.rc_off_since = time.monotonic() - RC_DEBOUNCE_SECONDS - 1
         self.strategy.update_rc_state(ws, False)
         assert not ws.rc_active
         assert ws.rc_off_since is None
@@ -114,6 +114,82 @@ class TestTerminalStatusStrategy:
             ):
                 self.strategy.parse_with_pyte("@0", "text", 0, 0)
                 mock_buf.assert_called_with("@0", 200, 50)
+
+
+class TestTerminalStatusStrategyPublicMethods:
+    def setup_method(self):
+        self.strategy = TerminalStatusStrategy()
+
+    def test_reset_probe_failures(self):
+        ws = self.strategy.get_state("@0")
+        ws.probe_failures = 5
+        self.strategy.reset_probe_failures("@0")
+        assert ws.probe_failures == 0
+
+    def test_reset_probe_failures_nonexistent_is_noop(self):
+        self.strategy.reset_probe_failures("@999")
+
+    def test_clear_seen_status(self):
+        ws = self.strategy.get_state("@0")
+        ws.has_seen_status = True
+        ws.startup_time = 123.0
+        self.strategy.clear_seen_status("@0")
+        assert not ws.has_seen_status
+        assert ws.startup_time is None
+
+    def test_clear_seen_status_nonexistent_is_noop(self):
+        self.strategy.clear_seen_status("@999")
+
+    def test_set_unbound_timer(self):
+        self.strategy.set_unbound_timer("@0", 42.0)
+        ws = self.strategy.get_state("@0")
+        assert ws.unbound_timer == 42.0
+
+    def test_clear_unbound_timer(self):
+        ws = self.strategy.get_state("@0")
+        ws.unbound_timer = 42.0
+        self.strategy.clear_unbound_timer("@0")
+        assert ws.unbound_timer is None
+
+    def test_clear_unbound_timer_nonexistent_is_noop(self):
+        self.strategy.clear_unbound_timer("@999")
+
+    def test_reset_all_probe_failures(self):
+        self.strategy.get_state("@0").probe_failures = 3
+        self.strategy.get_state("@1").probe_failures = 7
+        self.strategy.reset_all_probe_failures()
+        assert self.strategy.get_state("@0").probe_failures == 0
+        assert self.strategy.get_state("@1").probe_failures == 0
+
+    def test_reset_all_seen_status(self):
+        self.strategy.get_state("@0").has_seen_status = True
+        self.strategy.get_state("@0").startup_time = 1.0
+        self.strategy.get_state("@1").has_seen_status = True
+        self.strategy.reset_all_seen_status()
+        assert not self.strategy.get_state("@0").has_seen_status
+        assert self.strategy.get_state("@0").startup_time is None
+        assert not self.strategy.get_state("@1").has_seen_status
+
+    def test_reset_all_unbound_timers(self):
+        self.strategy.get_state("@0").unbound_timer = 1.0
+        self.strategy.get_state("@1").unbound_timer = 2.0
+        self.strategy.reset_all_unbound_timers()
+        assert self.strategy.get_state("@0").unbound_timer is None
+        assert self.strategy.get_state("@1").unbound_timer is None
+
+    def test_mark_seen_status(self):
+        ws = self.strategy.get_state("@0")
+        ws.startup_time = 123.0
+        assert not ws.has_seen_status
+        self.strategy.mark_seen_status("@0")
+        assert ws.has_seen_status
+        assert ws.startup_time is None
+
+    def test_mark_seen_status_creates_state(self):
+        self.strategy.mark_seen_status("@new")
+        ws = self.strategy.get_state("@new")
+        assert ws.has_seen_status
+        assert ws.startup_time is None
 
 
 class TestInteractiveUIStrategy:
@@ -209,7 +285,7 @@ class TestTopicLifecycleStrategy:
         assert count == 2
 
     def test_record_probe_failure_logs_at_threshold(self):
-        for _ in range(_MAX_PROBE_FAILURES - 1):
+        for _ in range(MAX_PROBE_FAILURES - 1):
             self.strategy.record_probe_failure("@0")
         with patch("ccgram.handlers.polling_strategies.logger") as mock_logger:
             self.strategy.record_probe_failure("@0")
@@ -252,3 +328,94 @@ class TestIsShellPrompt:
     @pytest.mark.parametrize("cmd", ["claude", "codex", "python", "node"])
     def test_non_shell_not_detected(self, cmd):
         assert not is_shell_prompt(cmd)
+
+
+class TestDecisionMethods:
+    def test_is_recently_active_true(self):
+        strategy = TerminalStatusStrategy()
+        now = time.monotonic()
+        assert strategy.is_recently_active("@0", now - 1.0)
+        assert strategy.get_state("@0").has_seen_status
+
+    def test_is_recently_active_false_when_stale(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_recently_active("@0", time.monotonic() - 60.0)
+
+    def test_is_recently_active_false_when_none(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_recently_active("@0", None)
+
+    def test_is_startup_expired_true(self):
+        from ccgram.handlers.polling_strategies import STARTUP_TIMEOUT
+
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.startup_time = time.monotonic() - STARTUP_TIMEOUT - 1.0
+        assert strategy.is_startup_expired("@0")
+
+    def test_is_startup_expired_false_within_grace(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.startup_time = time.monotonic()
+        assert not strategy.is_startup_expired("@0")
+
+    def test_is_startup_expired_false_no_startup(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_startup_expired("@0")
+
+    def test_is_single_pane_cached_true(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (1, time.monotonic() + 10.0)
+        assert strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_multi(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (3, time.monotonic() + 10.0)
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_expired(self):
+        strategy = TerminalStatusStrategy()
+        ws = strategy.get_state("@0")
+        ws.pane_count_cache = (1, time.monotonic() - 1.0)
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_single_pane_cached_false_no_cache(self):
+        strategy = TerminalStatusStrategy()
+        assert not strategy.is_single_pane_cached("@0")
+
+    def test_is_typing_throttled_true(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ts = lifecycle.get_state(1, 42)
+        ts.last_typing_sent = time.monotonic()
+        assert lifecycle.is_typing_throttled(1, 42)
+
+    def test_is_typing_throttled_false_past_interval(self):
+        from ccgram.handlers.polling_strategies import TYPING_INTERVAL
+
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ts = lifecycle.get_state(1, 42)
+        ts.last_typing_sent = time.monotonic() - TYPING_INTERVAL - 1.0
+        assert not lifecycle.is_typing_throttled(1, 42)
+
+    def test_is_typing_throttled_false_no_state(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        assert not lifecycle.is_typing_throttled(1, 42)
+
+    def test_should_skip_probe_true(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ws = terminal.get_state("@0")
+        ws.probe_failures = MAX_PROBE_FAILURES
+        assert lifecycle.should_skip_probe("@0")
+
+    def test_should_skip_probe_false(self):
+        terminal = TerminalStatusStrategy()
+        lifecycle = TopicLifecycleStrategy(terminal)
+        ws = terminal.get_state("@0")
+        ws.probe_failures = MAX_PROBE_FAILURES - 1
+        assert not lifecycle.should_skip_probe("@0")

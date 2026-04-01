@@ -25,8 +25,9 @@ from telegram.ext import ContextTypes
 
 from ..providers import registry as provider_registry
 from ..session import session_manager
+from ..user_preferences import user_preferences
 from ..thread_router import thread_router
-from ..tmux_manager import tmux_manager
+from ..tmux_manager import send_to_window, tmux_manager
 from .callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
@@ -160,7 +161,7 @@ async def _handle_star(
     )
     if fav_path is None:
         return
-    now_starred = session_manager.toggle_user_star(user_id, fav_path)
+    now_starred = user_preferences.toggle_user_star(user_id, fav_path)
 
     # Rebuild browser at current path to update star icons
     default_path = str(Path.cwd())
@@ -515,7 +516,7 @@ async def _create_window_and_bind(
             context.user_data.pop(PENDING_THREAD_TEXT, None)
         return
 
-    session_manager.update_user_mru(user_id, selected_path)
+    user_preferences.update_user_mru(user_id, selected_path)
     window_state = session_manager.get_window_state(created_wid)
     window_state.cwd = selected_path
     session_manager.set_window_provider(created_wid, provider_name)
@@ -593,10 +594,7 @@ async def _create_window_and_bind(
                 pending_text,
             )
         else:
-            send_ok, send_msg = await session_manager.send_to_window(
-                created_wid,
-                pending_text,
-            )
+            send_ok, send_msg = await send_to_window(created_wid, pending_text)
             if not send_ok:
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(

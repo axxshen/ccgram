@@ -376,6 +376,20 @@ def parse_status_from_screen(screen: ScreenBuffer) -> str | None:
     return parse_status_line("\n".join(active_lines), pane_rows=screen.rows)
 
 
+def parse_status_block_from_screen(screen: ScreenBuffer) -> str | None:
+    """Extract the status line plus visible checklist/progress lines."""
+    lines = screen.display
+
+    last_nonempty = len(lines) - 1
+    while last_nonempty >= 0 and not lines[last_nonempty].strip():
+        last_nonempty -= 1
+    if last_nonempty < 0:
+        return None
+
+    active_lines = lines[: last_nonempty + 1]
+    return parse_status_block("\n".join(active_lines), pane_rows=screen.rows)
+
+
 # ── Status line parsing ─────────────────────────────────────────────────
 
 # Spinner characters Claude Code uses in its status line (fast-path lookup)
@@ -393,6 +407,8 @@ _NON_SPINNER_CHARS = frozenset("─│┌┐└┘├┤┬┴┼═║╔╗╚
 # Note: Po (Punctuation Other) is excluded — it includes common ASCII chars
 # like !, #, %, @, *, / that would cause false positives.
 _SPINNER_CATEGORIES = frozenset({"So", "Sm"})
+_MAX_STATUS_PROGRESS_LINES = 8
+_STATUS_PROGRESS_RE = re.compile(r"^\s*(?:⎿\s*)?[✔◼◻◔]\s+\S")
 
 
 def is_likely_spinner(char: str) -> bool:
@@ -444,24 +460,80 @@ def parse_status_line(pane_text: str, *, pane_rows: int | None = None) -> str | 
     else:
         scan_start = 0
 
-    # Scan separators from bottom up within the scan range.
-    # Claude Code 4.6 renders two separators around the prompt line;
-    # the spinner sits above the upper one, possibly with a blank line between.
+    status_idx = _find_status_line_index(lines, scan_start)
+    if status_idx is None:
+        return None
+    return lines[status_idx].strip()[1:].strip()
+
+
+def parse_status_block(pane_text: str, *, pane_rows: int | None = None) -> str | None:
+    """Extract the Claude status line together with visible checklist lines."""
+    if not pane_text:
+        return None
+
+    lines = pane_text.strip().split("\n")
+    scan_start = _status_scan_start(lines, pane_rows)
+
+    status_idx = _find_status_line_index(lines, scan_start)
+    if status_idx is None:
+        return None
+
+    status_line = lines[status_idx].strip()[1:].strip()
+    progress_lines = _collect_status_progress_lines(lines, status_idx, scan_start)
+
+    if not progress_lines:
+        return status_line
+    progress_lines.reverse()
+    return "\n".join([status_line, *progress_lines])
+
+
+def _status_scan_start(lines: list[str], pane_rows: int | None) -> int:
+    """Compute the bottom-up status scan start index."""
+    if pane_rows is None:
+        return 0
+    scan_limit = max(int(pane_rows * 0.4), 16)
+    return max(len(lines) - scan_limit, 0)
+
+
+def _collect_status_progress_lines(
+    lines: list[str], status_idx: int, scan_start: int
+) -> list[str]:
+    """Collect contiguous checklist/progress lines above the status headline."""
+    progress_lines: list[str] = []
+    blanks_seen = 0
+    for idx in range(status_idx - 1, scan_start - 1, -1):
+        candidate = lines[idx].rstrip()
+        stripped = candidate.strip()
+        if not stripped:
+            if progress_lines:
+                blanks_seen += 1
+                if blanks_seen >= 1:
+                    break
+            continue
+        blanks_seen = 0
+        if not _STATUS_PROGRESS_RE.match(candidate):
+            break
+        progress_lines.append(stripped.removeprefix("⎿ ").strip())
+        if len(progress_lines) >= _MAX_STATUS_PROGRESS_LINES:
+            break
+    return progress_lines
+
+
+def _find_status_line_index(lines: list[str], scan_start: int) -> int | None:
+    """Locate the Claude spinner status line above the footer separators."""
     for i in range(len(lines) - 1, scan_start - 1, -1):
         if not _is_separator(lines[i]):
             continue
-        # Check up to 2 lines above the separator (skip blanks).
         for offset in (1, 2):
             j = i - offset
             if j < scan_start:
                 break
             candidate = lines[j].strip()
             if not candidate:
-                continue  # skip blank line
+                continue
             if is_likely_spinner(candidate[0]):
-                return candidate[1:].strip()
-            break  # non-blank, non-spinner → stop looking above this separator
-
+                return j
+            break
     return None
 
 

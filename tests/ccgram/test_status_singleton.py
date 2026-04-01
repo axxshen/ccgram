@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ccgram.claude_task_state import claude_task_state
 from ccgram.handlers.message_queue import (
     MessageTask,
     _do_send_status_message,
+    _process_status_clear_task,
     _process_status_update_task,
     _status_msg_info,
 )
@@ -20,6 +22,7 @@ from ccgram.handlers.message_queue import (
 USER_ID = 1
 THREAD_ID = 10
 WINDOW_ID = "@0"
+CHAT_ID = 42
 SKEY = (USER_ID, THREAD_ID)
 
 
@@ -54,7 +57,7 @@ class TestEditFailureNoNewMessage:
         mock_edit.return_value = False  # edit fails
 
         # Pre-populate: existing status message tracked
-        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text")
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text", CHAT_ID)
 
         bot = AsyncMock()
         await _process_status_update_task(bot, USER_ID, _status_task("new text"))
@@ -76,14 +79,112 @@ class TestEditFailureNoNewMessage:
         mock_tr.resolve_chat_id.return_value = 42
         mock_edit.return_value = True  # edit succeeds
 
-        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text")
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text", CHAT_ID)
 
         bot = AsyncMock()
         await _process_status_update_task(bot, USER_ID, _status_task("new text"))
 
         # Tracking should be updated with new text, same message id
-        assert _status_msg_info[SKEY] == (100, WINDOW_ID, "new text")
+        assert _status_msg_info[SKEY] == (100, WINDOW_ID, "new text", CHAT_ID)
         mock_send.assert_not_called()
+
+    @patch("ccgram.handlers.message_queue.thread_router")
+    @patch(
+        "ccgram.handlers.message_queue.rate_limit_send_message", new_callable=AsyncMock
+    )
+    async def test_status_update_appends_claude_tasks(self, mock_send, mock_tr) -> None:
+        mock_tr.resolve_chat_id.return_value = CHAT_ID
+        sent_msg = MagicMock()
+        sent_msg.message_id = 500
+        mock_send.return_value = sent_msg
+        claude_task_state.apply_entries(
+            WINDOW_ID,
+            "session-1",
+            [
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-1",
+                                "name": "TodoWrite",
+                                "input": {
+                                    "todos": [
+                                        {
+                                            "content": "Review changes",
+                                            "status": "completed",
+                                        },
+                                        {
+                                            "content": "Write tests",
+                                            "status": "in_progress",
+                                            "activeForm": "Writing tests",
+                                        },
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        bot = AsyncMock()
+        await _process_status_update_task(bot, USER_ID, _status_task("Working"))
+
+        sent_text = mock_send.call_args[0][2]
+        assert sent_text.startswith("Working")
+        assert "2 tasks (1 done, 1 open)" in sent_text
+        assert "✔ #1 Review changes" in sent_text
+        assert "◔ #2 Writing tests" in sent_text
+
+    @patch("ccgram.handlers.message_queue.thread_router")
+    @patch("ccgram.handlers.message_queue.edit_with_fallback", new_callable=AsyncMock)
+    async def test_status_clear_renders_task_only_when_snapshot_exists(
+        self, mock_edit, mock_tr
+    ) -> None:
+        mock_tr.resolve_chat_id.return_value = CHAT_ID
+        mock_edit.return_value = True
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text", CHAT_ID)
+        claude_task_state.apply_entries(
+            WINDOW_ID,
+            "session-1",
+            [
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool-1",
+                                "name": "TodoWrite",
+                                "input": {
+                                    "todos": [
+                                        {
+                                            "content": "Review changes",
+                                            "status": "completed",
+                                        }
+                                    ]
+                                },
+                            }
+                        ]
+                    },
+                }
+            ],
+        )
+
+        bot = AsyncMock()
+        await _process_status_clear_task(
+            bot,
+            USER_ID,
+            MessageTask(
+                task_type="status_clear", thread_id=THREAD_ID, window_id=WINDOW_ID
+            ),
+        )
+
+        sent_text = mock_edit.call_args[0][3]
+        assert sent_text.startswith("1 tasks (1 done, 0 open)")
+        assert "✔ #1 Review changes" in sent_text
 
 
 class TestDoSendGuard:
@@ -100,7 +201,7 @@ class TestDoSendGuard:
         mock_tr.resolve_chat_id.return_value = 42
         mock_edit.return_value = True
 
-        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text")
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text", CHAT_ID)
 
         bot = AsyncMock()
         await _do_send_status_message(bot, USER_ID, THREAD_ID, WINDOW_ID, "new text")
@@ -108,7 +209,7 @@ class TestDoSendGuard:
         # Should edit, not send new
         mock_edit.assert_called_once()
         mock_send.assert_not_called()
-        assert _status_msg_info[SKEY] == (100, WINDOW_ID, "new text")
+        assert _status_msg_info[SKEY] == (100, WINDOW_ID, "new text", CHAT_ID)
 
     @patch("ccgram.handlers.message_queue.thread_router")
     @patch("ccgram.handlers.message_queue.edit_with_fallback", new_callable=AsyncMock)
@@ -120,7 +221,7 @@ class TestDoSendGuard:
     ) -> None:
         mock_tr.resolve_chat_id.return_value = 42
 
-        _status_msg_info[SKEY] = (100, WINDOW_ID, "running...")
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "running...", CHAT_ID)
 
         bot = AsyncMock()
         await _do_send_status_message(bot, USER_ID, THREAD_ID, WINDOW_ID, "running...")
@@ -147,7 +248,7 @@ class TestDoSendGuard:
 
         mock_edit.assert_not_called()
         mock_send.assert_called_once()
-        assert _status_msg_info[SKEY] == (200, WINDOW_ID, "running...")
+        assert _status_msg_info[SKEY] == (200, WINDOW_ID, "running...", CHAT_ID)
 
     @patch("ccgram.handlers.message_queue.thread_router")
     @patch("ccgram.handlers.message_queue.edit_with_fallback", new_callable=AsyncMock)
@@ -165,14 +266,14 @@ class TestDoSendGuard:
         sent_msg.message_id = 300
         mock_send.return_value = sent_msg
 
-        _status_msg_info[SKEY] = (100, "@1", "running...")  # different window
+        _status_msg_info[SKEY] = (100, "@1", "running...", CHAT_ID)  # different window
 
         bot = AsyncMock()
         await _do_send_status_message(bot, USER_ID, THREAD_ID, WINDOW_ID, "running...")
 
         mock_clear.assert_called_once_with(bot, USER_ID, THREAD_ID)
         mock_send.assert_called_once()
-        assert _status_msg_info[SKEY] == (300, WINDOW_ID, "running...")
+        assert _status_msg_info[SKEY] == (300, WINDOW_ID, "running...", CHAT_ID)
 
     @patch("ccgram.handlers.message_queue.thread_router")
     @patch("ccgram.handlers.message_queue.edit_with_fallback", new_callable=AsyncMock)
@@ -188,7 +289,7 @@ class TestDoSendGuard:
         sent_msg.message_id = 400
         mock_send.return_value = sent_msg
 
-        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text")
+        _status_msg_info[SKEY] = (100, WINDOW_ID, "old text", CHAT_ID)
 
         bot = AsyncMock()
         await _do_send_status_message(bot, USER_ID, THREAD_ID, WINDOW_ID, "new text")
@@ -196,4 +297,4 @@ class TestDoSendGuard:
         # Edit attempted first, then falls through to send
         mock_edit.assert_called_once()
         mock_send.assert_called_once()
-        assert _status_msg_info[SKEY] == (400, WINDOW_ID, "new text")
+        assert _status_msg_info[SKEY] == (400, WINDOW_ID, "new text", CHAT_ID)
