@@ -9,6 +9,7 @@ from ccgram.handlers.msg_broker import (
     SWEEP_INTERVAL,
     _INJECTION_CHAR_LIMIT,
     _collect_eligible,
+    _recover_stale_pending,
     broker_delivery_cycle,
     format_file_reference,
     format_injection_text,
@@ -287,7 +288,7 @@ class TestCollectEligible:
 class TestBrokerDeliveryCycle:
     @pytest.fixture()
     def mock_tmux(self):
-        mgr = AsyncMock()
+        mgr = MagicMock()
         mgr.send_keys = AsyncMock(return_value=True)
         return mgr
 
@@ -512,6 +513,21 @@ class TestCrashRecovery:
         mailbox.mark_delivered(msg.id, "ccgram:@5")
         undelivered = mailbox.pending_undelivered(min_age_seconds=0)
         assert len(undelivered) == 0
+
+    def test_stale_pending_messages_remain_injectable(self, mailbox):
+        msg = mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
+        _recover_stale_pending(mailbox)
+        pending = mailbox.inbox("ccgram:@5")
+        assert len(pending) == 1
+        assert pending[0].id == msg.id
+        assert pending[0].status == "pending"
+
+    def test_stale_recovery_runs_once(self, mailbox):
+        mailbox.send("ccgram:@0", "ccgram:@5", "hello", msg_type="request")
+        _recover_stale_pending(mailbox)
+        _recover_stale_pending(mailbox)
+        assert delivery_strategy.is_crash_recovery_done()
+        assert len(mailbox.inbox("ccgram:@5")) == 1
 
 
 class TestModuleLevelFunctions:

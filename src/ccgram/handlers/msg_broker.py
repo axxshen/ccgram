@@ -166,19 +166,20 @@ def _format_for_delivery(msg: "Message", mailbox: "Mailbox", qualified_id: str) 
 
 
 def _recover_stale_pending(mailbox: "Mailbox") -> None:
-    """Mark stale pending messages as delivered on first broker cycle.
+    """Re-inject stale pending messages on the first broker cycle after restart.
 
-    Handles crash recovery: if the bot crashed after send_keys but before
-    mark_delivered, these messages would otherwise be injected again.
+    Handles crash recovery: messages that were pending before the last shutdown
+    are logged and allowed to flow through the normal delivery cycle. Re-injection
+    may cause duplicate delivery in the rare case where the bot crashed after
+    send_keys but before mark_delivered; that is preferable to silent message loss.
     """
     if delivery_strategy.is_crash_recovery_done():
         return
     delivery_strategy.mark_crash_recovery_done()
     stale = mailbox.pending_undelivered(min_age_seconds=5.0)
     for msg in stale:
-        mailbox.mark_delivered(msg.id, msg.to_id)
         logger.info(
-            "Crash recovery: marked stale pending message as delivered",
+            "Crash recovery: re-injecting stale pending message",
             msg_id=msg.id,
             to_id=msg.to_id,
         )
