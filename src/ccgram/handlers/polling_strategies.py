@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..providers.base import StatusUpdate
-from .topic_state_registry import topic_state
+from ..topic_state_registry import topic_state
 
 if TYPE_CHECKING:
     from ..screen_buffer import ScreenBuffer
@@ -221,6 +221,33 @@ class TerminalStatusStrategy:
         """Reset unbound timers for all windows."""
         for ws in self._states.values():
             ws.unbound_timer = None
+
+    def is_recently_active(self, window_id: str, last_activity: float | None) -> bool:
+        """Check if recent transcript activity indicates an active agent.
+
+        Side effect: marks window as having seen status if active.
+        """
+        if not last_activity:
+            return False
+        if (time.monotonic() - last_activity) < ACTIVITY_THRESHOLD:
+            self.mark_seen_status(window_id)
+            return True
+        return False
+
+    def is_startup_expired(self, window_id: str) -> bool:
+        """Check if a window's startup grace period has elapsed."""
+        ws = self._states.get(window_id)
+        if not ws or ws.startup_time is None:
+            return False
+        return (time.monotonic() - ws.startup_time) >= STARTUP_TIMEOUT
+
+    def is_single_pane_cached(self, window_id: str) -> bool:
+        """Check if pane count cache confirms single pane (skip subprocess)."""
+        ws = self._states.get(window_id)
+        if not ws or not ws.pane_count_cache:
+            return False
+        count, expiry = ws.pane_count_cache
+        return count <= 1 and expiry > time.monotonic()
 
     def mark_seen_status(self, window_id: str) -> None:
         """Mark a window as having seen its first status update."""
@@ -463,6 +490,18 @@ class TopicLifecycleStrategy:
     def reset_seen_status_state(self) -> None:
         """Reset all startup status tracking (for testing)."""
         self._terminal.reset_all_seen_status()
+
+    def is_typing_throttled(self, user_id: int, thread_id: int) -> bool:
+        """Check if typing indicator was sent too recently."""
+        ts = self._states.get((user_id, thread_id))
+        if not ts or ts.last_typing_sent is None:
+            return False
+        return (time.monotonic() - ts.last_typing_sent) < TYPING_INTERVAL
+
+    def should_skip_probe(self, window_id: str) -> bool:
+        """Check if a window has exceeded the probe failure threshold."""
+        ws = self._terminal.get_state(window_id)
+        return ws.probe_failures >= MAX_PROBE_FAILURES
 
     def record_probe_failure(self, window_id: str) -> int:
         """Increment probe failure counter; log once when threshold is reached."""
