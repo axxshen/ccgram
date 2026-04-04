@@ -246,11 +246,15 @@ class OpenAICompatCompleter(_BaseCompleter):
 
     async def _request(self, user_msg: str, *, shell: str = "") -> str:
         prompt = _build_system_prompt(shell)
+        return await self.complete(prompt, user_msg)
+
+    async def complete(self, system_prompt: str, user_message: str) -> str:
+        """Complete a text prompt using the OpenAI-compatible API."""
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_msg},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
             ],
             "temperature": self.temperature,
         }
@@ -272,11 +276,15 @@ class AnthropicCompleter(_BaseCompleter):
 
     async def _request(self, user_msg: str, *, shell: str = "") -> str:
         prompt = _build_system_prompt(shell)
+        return await self.complete(prompt, user_msg)
+
+    async def complete(self, system_prompt: str, user_message: str) -> str:
+        """Complete a text prompt using the Anthropic Messages API."""
         payload = {
             "model": self.model,
             "max_tokens": 1024,
-            "system": prompt,
-            "messages": [{"role": "user", "content": user_msg}],
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_message}],
             "temperature": self.temperature,
         }
         return await self._post_and_extract(

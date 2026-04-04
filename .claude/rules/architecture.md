@@ -79,11 +79,12 @@ graph TB
 
 ### LLM modules (`llm/`)
 
-| Module               | Description                                              |
-| -------------------- | -------------------------------------------------------- |
-| `base.py`            | CommandGenerator Protocol + CommandResult dataclass      |
-| `httpx_completer.py` | OpenAI-compatible + Anthropic chat completions via httpx |
-| `__init__.py`        | LLM provider registry + `get_completer()` factory        |
+| Module               | Description                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| `base.py`            | CommandGenerator + TextCompleter Protocols, CommandResult dataclass                               |
+| `httpx_completer.py` | OpenAI-compatible + Anthropic completions via httpx (command gen + generic `complete()`)          |
+| `summarizer.py`      | LLM-powered completion summary — reads transcript, produces single-line summary for Ready message |
+| `__init__.py`        | LLM provider registry + `get_completer()` / `get_text_completer()` factories                      |
 
 ### Whisper modules (`whisper/`)
 

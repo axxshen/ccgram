@@ -250,11 +250,27 @@ def _format_task_list_section(entry: ToolBatchEntry) -> list[str]:
     return [heading]
 
 
+_BATCH_ERROR_RE = re.compile(
+    r"\b(error|FAILED|fail|Exception|Traceback|exit code [1-9]\d*)\b", re.IGNORECASE
+)
+_BATCH_SUCCESS_RE = re.compile(r"\b(passed|success|exit code 0)\b", re.IGNORECASE)
+
+
+def _batch_result_prefix(result_text: str) -> str:
+    """Choose a result indicator prefix based on content."""
+    if _BATCH_ERROR_RE.search(result_text):
+        return "\u274c"
+    if _BATCH_SUCCESS_RE.search(result_text):
+        return "\u2705"
+    return "\u23bf"
+
+
 def _format_batch_entry(entry: ToolBatchEntry) -> str:
     """Render one standard batch row."""
     line = entry.tool_use_text
     if entry.tool_result_text is not None:
-        return f"{line}  \u23bf  {entry.tool_result_text}"
+        prefix = _batch_result_prefix(entry.tool_result_text)
+        return f"{line}  {prefix}  {entry.tool_result_text}"
     return f"{line}  \u23f3"
 
 
@@ -549,7 +565,7 @@ async def _process_batch_task(bot: Bot, user_id: int, task: MessageTask) -> None
         for entry in batch.entries:
             if entry.tool_use_id == task.tool_use_id:
                 result_text = task.text or ""
-                first_line = result_text.split("\n", 1)[0][:80]
+                first_line = result_text.split("\n", 1)[0][:200]
                 entry.tool_result_text = first_line
                 break
         else:

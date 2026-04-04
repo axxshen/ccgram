@@ -6,7 +6,7 @@ natural language descriptions using OpenAI-compatible or Anthropic APIs.
 
 import os
 
-from .base import CommandGenerator, CommandResult
+from .base import CommandGenerator, CommandResult, TextCompleter
 from .httpx_completer import AnthropicCompleter, OpenAICompatCompleter
 
 _PROVIDERS: dict[str, dict[str, str | None]] = {
@@ -47,10 +47,11 @@ _PROVIDERS: dict[str, dict[str, str | None]] = {
 _FALLBACK_API_KEY_ENV = "OPENAI_API_KEY"
 
 
-def get_completer() -> CommandGenerator | None:
-    """Create and return an LLM command generator based on config.
+def _create_completer() -> OpenAICompatCompleter | AnthropicCompleter | None:
+    """Create an LLM completer instance from config.
 
-    Returns None if llm_provider is not configured (empty string).
+    Returns None if llm_provider is not configured. The returned object
+    satisfies both ``CommandGenerator`` and ``TextCompleter`` protocols.
 
     API key resolution order:
       1. ``CCGRAM_LLM_API_KEY`` (explicit override)
@@ -70,11 +71,9 @@ def get_completer() -> CommandGenerator | None:
 
     api_key = config.llm_api_key
     if not api_key:
-        # Try provider-specific env var first
         api_key_env = provider_info.get("api_key_env", "")
         if api_key_env:
             api_key = os.getenv(api_key_env, "")
-        # Fall back to OPENAI_API_KEY as universal default
         if not api_key:
             api_key = os.getenv(_FALLBACK_API_KEY_ENV, "")
         if not api_key and provider != "ollama":
@@ -102,8 +101,28 @@ def get_completer() -> CommandGenerator | None:
     )
 
 
+def get_completer() -> CommandGenerator | None:
+    """Create and return an LLM command generator based on config.
+
+    Returns None if llm_provider is not configured (empty string).
+    """
+    return _create_completer()
+
+
+def get_text_completer() -> TextCompleter | None:
+    """Create and return a generic LLM text completer based on config.
+
+    Returns None if llm_provider is not configured. Uses the same
+    config/instantiation as ``get_completer()`` but typed for
+    ``complete(system_prompt, user_message)`` usage.
+    """
+    return _create_completer()
+
+
 __all__ = [
     "CommandGenerator",
     "CommandResult",
+    "TextCompleter",
     "get_completer",
+    "get_text_completer",
 ]

@@ -8,6 +8,8 @@ of relying solely on terminal scraping.
 Key function: dispatch_hook_event().
 """
 
+from collections.abc import Sequence
+
 import structlog
 
 from telegram import Bot
@@ -99,6 +101,38 @@ async def _handle_notification(event: HookEvent, bot: Bot) -> None:
             clear_interactive_mode(user_id, thread_id)
 
 
+async def _enhance_with_llm_summary(
+    bot: Bot,
+    users: Sequence[tuple[int, int | None, str]],
+    window_id: str,
+    transcript_path: str,
+    num_turns: int,
+) -> None:
+    """Async enhancement: replace Ready header with LLM summary via status queue."""
+    try:
+        from ..llm.summarizer import summarize_completion
+
+        summary = await summarize_completion(transcript_path)
+        if not summary:
+            return
+
+        from .message_queue import enqueue_status_update
+
+        enhanced = claude_task_state.format_completion_text(
+            window_id, num_turns=num_turns
+        )
+        enhanced = enhanced.replace("\u2713 Ready", f"\u2713 Done \u2014 {summary}", 1)
+
+        for user_id, thread_id, _window_id in users:
+            notif_mode = session_manager.get_notification_mode(window_id)
+            if notif_mode not in ("muted", "errors_only"):
+                await enqueue_status_update(
+                    bot, user_id, window_id, enhanced, thread_id=thread_id
+                )
+    except RuntimeError, OSError, ValueError:
+        logger.debug("LLM summary enhancement failed", exc_info=True)
+
+
 async def _handle_stop(event: HookEvent, bot: Bot) -> None:
     """Handle a Stop event — transition status directly to idle.
 
@@ -107,7 +141,6 @@ async def _handle_stop(event: HookEvent, bot: Bot) -> None:
     topics, so Stop only updates the status bubble and broker delivery state.
     Muted/errors_only windows get their status cleared instead.
     """
-    from .callback_data import IDLE_STATUS_TEXT
     from .message_queue import enqueue_status_update
 
     users = _resolve_users_for_window_key(event.window_key)
@@ -121,12 +154,17 @@ async def _handle_stop(event: HookEvent, bot: Bot) -> None:
         stop_reason,
     )
 
+    num_turns = event.data.get("num_turns", 0)
+    window_id = ""
     for user_id, thread_id, window_id in users:
         claude_task_state.clear_wait_header(window_id)
         notif_mode = session_manager.get_notification_mode(window_id)
-        status_text = (
-            None if notif_mode in ("muted", "errors_only") else IDLE_STATUS_TEXT
-        )
+        if notif_mode in ("muted", "errors_only"):
+            status_text = None
+        else:
+            status_text = claude_task_state.format_completion_text(
+                window_id, num_turns=num_turns
+            )
         await enqueue_status_update(
             bot, user_id, window_id, status_text, thread_id=thread_id
         )
@@ -135,6 +173,18 @@ async def _handle_stop(event: HookEvent, bot: Bot) -> None:
     from .periodic_tasks import run_broker_cycle
 
     await run_broker_cycle(bot, idle_windows=frozenset({event.window_key}))
+
+    # Fire async LLM summary enhancement (non-blocking)
+    if window_id and users:
+        transcript_path = session_manager.get_window_state(window_id).transcript_path
+        if transcript_path:
+            import asyncio
+
+            asyncio.create_task(
+                _enhance_with_llm_summary(
+                    bot, users, window_id, transcript_path, num_turns
+                )
+            )
 
 
 # Track active subagents per window: window_id -> {subagent_id -> name}

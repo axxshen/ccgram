@@ -13,6 +13,7 @@ from ccgram.terminal_parser import (
     is_likely_spinner,
     parse_status_block,
     parse_status_line,
+    status_emoji_prefix,
     strip_pane_chrome,
 )
 
@@ -607,6 +608,35 @@ class TestFormatStatusDisplay:
         assert (
             format_status_display("foo bar testing baz") == "\U0001f9ea testing\u2026"
         )
+
+
+class TestStatusEmojiPrefix:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("Writing tests", "\U0001f4dd"),
+            ("Reading file", "\U0001f4d6"),
+            ("Running make test", "\u26a1"),
+            ("Testing connection", "\U0001f9ea"),
+            ("thinking about approach", "\U0001f9e0"),
+            ("Something unknown", "\u2699\ufe0f"),
+            ("", "\u2699\ufe0f"),
+        ],
+    )
+    def test_returns_emoji_only(self, raw: str, expected: str) -> None:
+        assert status_emoji_prefix(raw) == expected
+
+    def test_case_insensitive(self) -> None:
+        assert status_emoji_prefix("EDITING file") == "\u270f\ufe0f"
+
+    def test_first_word_priority(self) -> None:
+        assert status_emoji_prefix("Writing tests for module") == "\U0001f4dd"
+
+    def test_consistent_with_format_status_display(self) -> None:
+        raw = "Searching for imports"
+        emoji = status_emoji_prefix(raw)
+        label = format_status_display(raw)
+        assert label.startswith(emoji)
 
 
 class TestFindChromeBoundary:

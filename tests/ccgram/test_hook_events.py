@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -152,9 +152,10 @@ class TestHandleStop:
             await dispatch_hook_event(event, bot)
 
             mock_emoji.assert_not_called()
-            mock_enqueue.assert_called_once_with(
-                bot, 100, "@0", IDLE_STATUS_TEXT, thread_id=42
-            )
+            mock_enqueue.assert_called_once()
+            status_text = mock_enqueue.call_args[0][3]
+            assert status_text is not None
+            assert IDLE_STATUS_TEXT in status_text
 
     @pytest.mark.parametrize("mode", ["muted", "errors_only"])
     async def test_stop_silent_mode_clears_status(self, monkeypatch, mode) -> None:
@@ -191,6 +192,122 @@ class TestHandleStop:
             event = _make_event(event_type="Stop")
             await dispatch_hook_event(event, bot)
             mock_enqueue.assert_not_called()
+
+
+class TestEnhanceWithLlmSummary:
+    async def test_enhances_ready_with_summary(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        mock_state = MagicMock()
+        mock_state.transcript_path = "/tmp/transcript.jsonl"
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_notification_mode",
+                return_value="all",
+            ),
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_window_state",
+                return_value=mock_state,
+            ),
+            patch(
+                "ccgram.handlers.message_queue.enqueue_status_update"
+            ) as mock_enqueue,
+            patch(
+                "ccgram.llm.summarizer.summarize_completion",
+                new_callable=AsyncMock,
+                return_value="Fixed auth bug, all 5 tests pass",
+            ),
+        ):
+            event = _make_event(
+                event_type="Stop",
+                data={"stop_reason": "done", "num_turns": 3},
+            )
+            await dispatch_hook_event(event, bot)
+
+            import asyncio
+
+            await asyncio.sleep(0.1)
+
+            calls = mock_enqueue.call_args_list
+            assert len(calls) >= 2
+            last_text = calls[-1][0][3]
+            assert "Done" in last_text
+            assert "Fixed auth bug" in last_text
+
+    async def test_no_enhancement_when_no_llm(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        mock_state = MagicMock()
+        mock_state.transcript_path = "/tmp/transcript.jsonl"
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_notification_mode",
+                return_value="all",
+            ),
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_window_state",
+                return_value=mock_state,
+            ),
+            patch(
+                "ccgram.handlers.message_queue.enqueue_status_update"
+            ) as mock_enqueue,
+            patch(
+                "ccgram.llm.summarizer.summarize_completion",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            event = _make_event(
+                event_type="Stop",
+                data={"stop_reason": "done", "num_turns": 3},
+            )
+            await dispatch_hook_event(event, bot)
+
+            import asyncio
+
+            await asyncio.sleep(0.1)
+
+            assert mock_enqueue.call_count == 1
+
+    async def test_enhancement_error_is_silent(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        mock_state = MagicMock()
+        mock_state.transcript_path = "/tmp/transcript.jsonl"
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_notification_mode",
+                return_value="all",
+            ),
+            patch(
+                "ccgram.handlers.hook_events.session_manager.get_window_state",
+                return_value=mock_state,
+            ),
+            patch("ccgram.handlers.message_queue.enqueue_status_update"),
+            patch(
+                "ccgram.llm.summarizer.summarize_completion",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("API down"),
+            ),
+        ):
+            event = _make_event(
+                event_type="Stop",
+                data={"stop_reason": "done", "num_turns": 3},
+            )
+            await dispatch_hook_event(event, bot)
+
+            import asyncio
+
+            await asyncio.sleep(0.1)
 
 
 class TestHandleNotification:

@@ -295,6 +295,140 @@ class TestClaudeTaskStateStore:
         assert snapshot.done_count == 1
 
 
+class TestLastStatus:
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        claude_task_state.reset()
+        yield
+        claude_task_state.reset()
+
+    def test_set_and_get(self) -> None:
+        claude_task_state.set_last_status("@0", "Running tests")
+        assert claude_task_state.get_last_status("@0") == "Running tests"
+
+    def test_get_returns_none_when_unset(self) -> None:
+        assert claude_task_state.get_last_status("@99") is None
+
+    def test_clear_window_clears_last_status(self) -> None:
+        claude_task_state.set_last_status("@0", "Working")
+        claude_task_state.clear_window("@0")
+        assert claude_task_state.get_last_status("@0") is None
+
+    def test_reset_clears_last_status(self) -> None:
+        claude_task_state.set_last_status("@0", "Working")
+        claude_task_state.reset()
+        assert claude_task_state.get_last_status("@0") is None
+
+    def test_overwrite(self) -> None:
+        claude_task_state.set_last_status("@0", "Reading")
+        claude_task_state.set_last_status("@0", "Writing")
+        assert claude_task_state.get_last_status("@0") == "Writing"
+
+
+class TestFormatCompletionText:
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        claude_task_state.reset()
+        yield
+        claude_task_state.reset()
+
+    def test_bare_ready_when_nothing_available(self) -> None:
+        result = claude_task_state.format_completion_text("@0")
+        assert result == "\u2713 Ready"
+
+    def test_with_last_status_only(self) -> None:
+        claude_task_state.set_last_status("@0", "Running make test")
+        result = claude_task_state.format_completion_text("@0")
+        assert "\u2713 Ready" in result
+        assert "Last: Running make test" in result
+
+    def test_with_last_status_and_turns(self) -> None:
+        claude_task_state.set_last_status("@0", "Running make test")
+        result = claude_task_state.format_completion_text("@0", num_turns=12)
+        assert "Last: Running make test" in result
+        assert "12 turns" in result
+
+    def test_with_task_checklist(self) -> None:
+        claude_task_state.apply_entries(
+            "@0",
+            "s1",
+            [
+                _assistant_tool_use(
+                    "tu1", "TaskCreate", {"subject": "write tests", "description": ""}
+                ),
+                _user_tool_result(
+                    "tu1",
+                    content="ok",
+                    tool_use_result={"task": {"id": "1", "subject": "write tests"}},
+                ),
+                _assistant_tool_use(
+                    "tu2", "TaskCreate", {"subject": "run linter", "description": ""}
+                ),
+                _user_tool_result(
+                    "tu2",
+                    content="ok",
+                    tool_use_result={"task": {"id": "2", "subject": "run linter"}},
+                ),
+            ],
+        )
+        claude_task_state.apply_entries(
+            "@0",
+            "s1",
+            [
+                _assistant_tool_use(
+                    "tu3",
+                    "TaskUpdate",
+                    {"taskId": "1", "status": "completed"},
+                ),
+            ],
+        )
+        result = claude_task_state.format_completion_text("@0", num_turns=5)
+        assert "\u2713 Ready" in result
+        assert "\u2714 write tests" in result
+        assert "run linter" in result
+        assert "1/2 tasks done" in result
+        assert "5 turns" in result
+
+    def test_with_task_checklist_no_turns(self) -> None:
+        claude_task_state.apply_entries(
+            "@0",
+            "s1",
+            [
+                _assistant_tool_use(
+                    "tu1", "TaskCreate", {"subject": "write tests", "description": ""}
+                ),
+                _user_tool_result(
+                    "tu1",
+                    content="ok",
+                    tool_use_result={"task": {"id": "1", "subject": "write tests"}},
+                ),
+            ],
+        )
+        result = claude_task_state.format_completion_text("@0")
+        assert "0/1 tasks done" in result
+        assert "turns" not in result
+
+    def test_task_checklist_takes_priority_over_last_status(self) -> None:
+        claude_task_state.set_last_status("@0", "Some status")
+        claude_task_state.apply_entries(
+            "@0",
+            "s1",
+            [
+                _assistant_tool_use(
+                    "tu1", "TaskCreate", {"subject": "do thing", "description": ""}
+                ),
+                _user_tool_result(
+                    "tu1",
+                    content="ok",
+                    tool_use_result={"task": {"id": "1", "subject": "do thing"}},
+                ),
+            ],
+        )
+        result = claude_task_state.format_completion_text("@0")
+        assert "do thing" in result
+        assert "Last:" not in result
+
+
 class TestClassifyWaitMessage:
     @pytest.mark.parametrize(
         ("message", "expected"),

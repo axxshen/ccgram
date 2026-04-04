@@ -536,7 +536,7 @@ class TestProcessBatchTask:
         batch = _active_batches[(1, 10)]
         result_text = batch.entries[0].tool_result_text
         assert result_text is not None
-        assert len(result_text) <= 80
+        assert len(result_text) <= 200
         assert "\n" not in result_text
 
     @patch("ccgram.handlers.message_queue.thread_router")
@@ -1096,3 +1096,72 @@ class TestDifferentUsersIsolation:
         assert (2, 10) in _active_batches
         assert _active_batches[(1, 10)].entries[0].tool_use_id == "tu1"
         assert _active_batches[(2, 10)].entries[0].tool_use_id == "tu2"
+
+
+class TestBatchResultTruncation:
+    def test_result_truncated_to_200_chars(self):
+        long_text = "x" * 300
+        entry = ToolBatchEntry("t1", "Bash cmd")
+        entry.tool_result_text = long_text.split("\n", 1)[0][:200]
+        assert len(entry.tool_result_text) == 200
+
+    def test_multiline_result_uses_first_line(self):
+        result_text = "line one\nline two\nline three"
+        first_line = result_text.split("\n", 1)[0][:200]
+        assert first_line == "line one"
+
+
+class TestBatchResultPrefix:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("error: file not found", "\u274c"),
+            ("FAILED test_foo.py::test_bar", "\u274c"),
+            ("Exception: KeyError", "\u274c"),
+            ("Traceback (most recent call last)", "\u274c"),
+            ("exit code 1", "\u274c"),
+            ("exit code 127", "\u274c"),
+            ("23 passed", "\u2705"),
+            ("Tests passed successfully", "\u2705"),
+            ("success", "\u2705"),
+            ("exit code 0", "\u2705"),
+            ("10 lines read", "\u23bf"),
+            ("file written", "\u23bf"),
+            ("", "\u23bf"),
+        ],
+    )
+    def test_prefix_detection(self, text, expected):
+        from ccgram.handlers.message_queue import _batch_result_prefix
+
+        assert _batch_result_prefix(text) == expected
+
+    def test_error_takes_priority_over_success(self):
+        from ccgram.handlers.message_queue import _batch_result_prefix
+
+        text = "3 passed, 1 FAILED"
+        assert _batch_result_prefix(text) == "\u274c"
+
+
+class TestBatchEntryFormatting:
+    def test_success_prefix_in_formatted_entry(self):
+        entry = ToolBatchEntry("t1", "Bash make test", "23 passed")
+        result = format_batch_message([entry])
+        assert "\u2705" in result
+        assert "23 passed" in result
+
+    def test_error_prefix_in_formatted_entry(self):
+        entry = ToolBatchEntry("t1", "Bash make test", "FAILED test_foo")
+        result = format_batch_message([entry])
+        assert "\u274c" in result
+        assert "FAILED test_foo" in result
+
+    def test_neutral_prefix_in_formatted_entry(self):
+        entry = ToolBatchEntry("t1", "Read src/foo.py", "42 lines")
+        result = format_batch_message([entry])
+        assert "\u23bf" in result
+        assert "42 lines" in result
+
+    def test_pending_entry_shows_hourglass(self):
+        entry = ToolBatchEntry("t1", "Bash make test")
+        result = format_batch_message([entry])
+        assert "\u23f3" in result

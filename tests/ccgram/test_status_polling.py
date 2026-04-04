@@ -627,7 +627,7 @@ class TestPyteFallbackInUpdateStatus:
             provider_mock = mocks["provider"].return_value
             provider_mock.parse_terminal_status.assert_not_called()
             mocks["enqueue"].assert_called_once()
-            assert mocks["enqueue"].call_args[0][3] == "\U0001f4d6 reading\u2026"
+            assert mocks["enqueue"].call_args[0][3] == "\U0001f4d6 Reading file"
 
 
 class TestClearSeenStatus:

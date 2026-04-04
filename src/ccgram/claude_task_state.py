@@ -92,14 +92,17 @@ class ClaudeTaskStateStore:
     def __init__(self) -> None:
         self._window_states: dict[str, _WindowTaskState] = {}
         self._wait_headers: dict[str, str] = {}
+        self._last_status: dict[str, str] = {}
 
     def reset(self) -> None:
         self._window_states.clear()
         self._wait_headers.clear()
+        self._last_status.clear()
 
     def clear_window(self, window_id: str) -> None:
         self._window_states.pop(window_id, None)
         self._wait_headers.pop(window_id, None)
+        self._last_status.pop(window_id, None)
 
     def _replace_window(self, window_id: str, session_id: str) -> _WindowTaskState:
         state = _WindowTaskState(session_id=session_id)
@@ -147,6 +150,69 @@ class ClaudeTaskStateStore:
 
     def get_wait_header(self, window_id: str) -> str | None:
         return self._wait_headers.get(window_id)
+
+    def set_last_status(self, window_id: str, status_text: str) -> None:
+        """Store the last non-idle status text for a window."""
+        self._last_status[window_id] = status_text
+
+    def get_last_status(self, window_id: str) -> str | None:
+        """Retrieve the last non-idle status text for a window."""
+        return self._last_status.get(window_id)
+
+    def format_completion_text(self, window_id: str, num_turns: int = 0) -> str:
+        """Build an enriched Ready message with task checklist and last status.
+
+        Returns:
+            Enriched text like::
+
+                ✓ Ready
+                ━━━━━━━━━━━━━━━━━━━━
+                ✔ write unit tests
+                ✔ run linter
+                3/3 tasks done · 12 turns
+
+            Falls back to ``"✓ Ready\\nLast: <status> · N turns"`` when no
+            task checklist, or bare ``"✓ Ready"`` when nothing available.
+        """
+        from .handlers.callback_data import IDLE_STATUS_TEXT
+
+        snapshot = self.get_snapshot(window_id)
+        last_status = self.get_last_status(window_id)
+
+        if snapshot is None and last_status is None:
+            return IDLE_STATUS_TEXT
+
+        lines: list[str] = [IDLE_STATUS_TEXT]
+
+        if snapshot is not None:
+            lines.append("\u2501" * 20)
+            for item in snapshot.items[:8]:
+                if item.status == "completed":
+                    glyph = "\u2714"
+                elif item.status == "in_progress":
+                    glyph = "\u25d4"
+                else:
+                    glyph = "\u25fb"
+                label = (
+                    item.active_form
+                    if item.status == "in_progress" and item.active_form
+                    else item.subject
+                )
+                lines.append(f"{glyph} {label}")
+
+            hidden = snapshot.total_count - min(8, snapshot.total_count)
+            if hidden > 0:
+                lines.append(f"+{hidden} more")
+
+            summary_parts = [f"{snapshot.done_count}/{snapshot.total_count} tasks done"]
+            if num_turns:
+                summary_parts.append(f"{num_turns} turns")
+            lines.append(" \u00b7 ".join(summary_parts))
+        elif last_status:
+            suffix = f" \u00b7 {num_turns} turns" if num_turns else ""
+            lines.append(f"Last: {last_status}{suffix}")
+
+        return "\n".join(lines)
 
     def rebuild_from_entries(
         self,

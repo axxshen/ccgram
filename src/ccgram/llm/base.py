@@ -18,6 +18,26 @@ class CommandResult:
     is_dangerous: bool = False
 
 
+class TextCompleter(Protocol):
+    """Protocol for generic LLM text completion."""
+
+    async def complete(
+        self,
+        system_prompt: str,
+        user_message: str,
+    ) -> str:
+        """Complete a text prompt with a system instruction.
+
+        Args:
+            system_prompt: System-level instruction for the LLM.
+            user_message: User message content.
+
+        Returns:
+            The LLM's response text.
+        """
+        ...
+
+
 class CommandGenerator(Protocol):
     """Protocol for LLM-based shell command generators."""
 

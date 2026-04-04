@@ -464,14 +464,19 @@ async def update_status_message(
 
     status_line = None
     if status and not status.is_interactive:
-        status_line = (
-            status.raw_text if "\n" in status.raw_text else status.display_label
-        )
+        if "\n" in status.raw_text:
+            status_line = status.raw_text
+        else:
+            from ..terminal_parser import status_emoji_prefix
+
+            emoji = status_emoji_prefix(status.raw_text)
+            status_line = f"{emoji} {status.raw_text}"
 
     notif_mode = session_manager.get_notification_mode(window_id)
 
     if status_line:
         claude_task_state.clear_wait_header(window_id)
+        claude_task_state.set_last_status(window_id, status_line)
         terminal_strategy.mark_seen_status(window_id)
         await _send_typing_throttled(bot, user_id, thread_id)
         if notif_mode not in ("muted", "errors_only"):

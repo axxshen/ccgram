@@ -71,13 +71,13 @@ Extend the existing LLM infrastructure with a generic completion method so the s
 - Modify: `src/ccgram/llm/__init__.py`
 - Create: `tests/ccgram/llm/test_completer_generic.py`
 
-- [ ] Add `TextCompleter` protocol to `base.py` with `async complete(system_prompt: str, user_message: str) -> str` method
-- [ ] Add `complete()` method to `OpenAICompatCompleter` — calls `_post_and_extract()` directly with caller-supplied system prompt and user message (no new abstract methods, no changes to `_request()`)
-- [ ] Add `complete()` method to `AnthropicCompleter` — same pattern, Anthropic-specific payload
-- [ ] Do NOT refactor `generate_command()` — leave it untouched to avoid risk to the existing shell provider
-- [ ] Add `get_text_completer() -> TextCompleter | None` factory to `__init__.py` (returns the same completer instance as `get_completer()`, just typed as `TextCompleter`)
-- [ ] Write tests for `complete()` method on both completer classes (mock httpx responses)
-- [ ] Run tests — must pass before task 2
+- [x] Add `TextCompleter` protocol to `base.py` with `async complete(system_prompt: str, user_message: str) -> str` method
+- [x] Add `complete()` method to `OpenAICompatCompleter` — calls `_post_and_extract()` directly with caller-supplied system prompt and user message (no new abstract methods, no changes to `_request()`)
+- [x] Add `complete()` method to `AnthropicCompleter` — same pattern, Anthropic-specific payload
+- [x] Do NOT refactor `generate_command()` — leave it untouched to avoid risk to the existing shell provider
+- [x] Add `get_text_completer() -> TextCompleter | None` factory to `__init__.py` — extracted shared `_create_completer()` helper returning concrete types to satisfy both protocols
+- [x] Write tests for `complete()` method on both completer classes (mock httpx responses) + `get_text_completer()` factory
+- [x] Run tests — 43 passed, fmt/lint/typecheck clean
 
 ### Task 2: Show full status text with emoji prefix
 
@@ -90,13 +90,13 @@ Replace the generic "📝 writing…" label with "📝 Writing tests for auth mo
 - Modify: `tests/ccgram/test_terminal_parser.py`
 - Modify: `tests/ccgram/handlers/test_polling_coordinator.py`
 
-- [ ] Add `status_emoji_prefix(raw_status: str) -> str` function to `terminal_parser.py` — uses the same `_STATUS_KEYWORDS` table but returns only the emoji (e.g. `"📝"`, `"🧪"`, `"⚡"`), default `"⚙️"`. One table, no duplication.
-- [ ] Refactor `format_status_display()` to call `status_emoji_prefix()` internally — keeps them in sync via the shared `_STATUS_KEYWORDS` table (DRY)
-- [ ] Change `polling_coordinator.py` line 468: for single-line status, use `f"{status_emoji_prefix(headline)} {status.raw_text}"` instead of `status.display_label`
-- [ ] Write tests for `status_emoji_prefix()` — keyword matching, default fallback, empty input
-- [ ] Verify `format_status_display()` still produces same output after refactor
-- [ ] Update polling coordinator tests for new status text format
-- [ ] Run tests — must pass before task 3
+- [x] Add `status_emoji_prefix(raw_status: str) -> str` function + shared `_match_status_keyword()` helper
+- [x] Refactor `format_status_display()` to use `_match_status_keyword()` — single keyword table (DRY)
+- [x] Change `polling_coordinator.py`: single-line status now shows `f"{emoji} {raw_text}"`
+- [x] Write tests for `status_emoji_prefix()` — 10 tests including consistency check
+- [x] Verified `format_status_display()` still produces same output (47 tests pass)
+- [x] Updated polling coordinator test assertion for new status text format
+- [x] Run tests — 2935 passed, fmt/lint/typecheck clean
 
 ### Task 3: Enrich "Ready" with last status + task checklist
 
@@ -110,8 +110,8 @@ When Claude finishes, show what it was last doing and the task checklist state i
 - Modify: `tests/ccgram/test_claude_task_state.py`
 - Modify: `tests/ccgram/handlers/test_hook_events.py`
 
-- [ ] Add `_last_status: dict[str, str]` to `ClaudeTaskStateStore` with `set_last_status(window_id, text)`, `get_last_status(window_id) -> str | None` methods. Clear it in the existing `clear_window()` method (no new registry entry needed — already registered).
-- [ ] Add `format_completion_text(window_id: str, num_turns: int = 0) -> str` method to `ClaudeTaskStateStore` — builds enriched Ready text:
+- [x] Add `_last_status: dict[str, str]` to `ClaudeTaskStateStore` with `set_last_status(window_id, text)`, `get_last_status(window_id) -> str | None` methods. Clear it in the existing `clear_window()` method (no new registry entry needed — already registered).
+- [x] Add `format_completion_text(window_id: str, num_turns: int = 0) -> str` method to `ClaudeTaskStateStore` — builds enriched Ready text:
   ```
   ✓ Ready
   ━━━━━━━━━━━━━━━━━━━━
@@ -121,13 +121,13 @@ When Claude finishes, show what it was last doing and the task checklist state i
   3/3 tasks done · 12 turns
   ```
   Falls back to `"✓ Ready\nLast: <last_status>"` when no task checklist. Falls back to bare `"✓ Ready"` when neither available.
-- [ ] Call `claude_task_state.set_last_status()` from `polling_coordinator.py` whenever a non-idle status is enqueued (inside `update_status_message` after `status_line` is computed)
-- [ ] Modify `_handle_stop()` in `hook_events.py`: call `claude_task_state.format_completion_text(window_id, num_turns=event.data.get("num_turns", 0))` instead of bare `IDLE_STATUS_TEXT`
-- [ ] Do NOT modify `_transition_to_idle()` — it still sends bare `IDLE_STATUS_TEXT`. The Stop hook fires first with the enriched text; the polling path may follow but the dedup check (`status_text == last_text`) will prevent overwrite if the text hasn't changed. If polling fires first (rare, no hook), bare Ready is acceptable.
-- [ ] Write tests for `format_completion_text()` — with tasks, without tasks, with last status only, with num_turns, empty state
-- [ ] Write tests for `set/get_last_status` lifecycle + verify `clear_window()` clears it
-- [ ] Update hook_events tests for enriched Stop text
-- [ ] Run tests — must pass before task 4
+- [x] Call `claude_task_state.set_last_status()` from `polling_coordinator.py` whenever a non-idle status is enqueued (inside `update_status_message` after `status_line` is computed)
+- [x] Modify `_handle_stop()` in `hook_events.py`: call `claude_task_state.format_completion_text(window_id, num_turns=event.data.get("num_turns", 0))` instead of bare `IDLE_STATUS_TEXT`
+- [x] Do NOT modify `_transition_to_idle()` — it still sends bare `IDLE_STATUS_TEXT`. The Stop hook fires first with the enriched text; the polling path may follow but the dedup check (`status_text == last_text`) will prevent overwrite if the text hasn't changed. If polling fires first (rare, no hook), bare Ready is acceptable.
+- [x] Write tests for `format_completion_text()` — with tasks, without tasks, with last status only, with num_turns, empty state
+- [x] Write tests for `set/get_last_status` lifecycle + verify `clear_window()` clears it
+- [x] Update hook_events tests for enriched Stop text
+- [x] Run tests — must pass before task 4
 
 ### Task 4: Improve tool batch result display
 
@@ -138,13 +138,13 @@ Show more useful tool result content in batched mode — increase length limit, 
 - Modify: `src/ccgram/handlers/message_queue.py`
 - Modify: `tests/ccgram/handlers/test_message_queue.py`
 
-- [ ] Increase `tool_result_text` truncation from `first_line[:80]` to `first_line[:200]` — this is set inside `_process_batch_task()` where `entry.tool_result_text` is assigned (around line 552)
-- [ ] In the batch entry rendering logic (inside `format_batch_message()` / the entry formatting path): if `tool_result_text` contains error-indicating patterns (`error`, `FAILED`, `exit code [1-9]`, `Exception`, `Traceback`), prefix with `❌` instead of `⎿`; if contains success patterns (`passed`, `ok`, `success`, `exit code 0`), prefix with `✅`
-- [ ] For Bash tool results in batch: extract and show exit code if present in result text (pattern: `Exit code: N` or similar from Claude's Bash tool)
-- [ ] Write tests for increased truncation length
-- [ ] Write tests for error/success prefix detection in batch entries
-- [ ] Write tests for Bash exit code extraction
-- [ ] Run tests — must pass before task 5
+- [x] Increase `tool_result_text` truncation from `first_line[:80]` to `first_line[:200]` — this is set inside `_process_batch_task()` where `entry.tool_result_text` is assigned (around line 552)
+- [x] In the batch entry rendering logic (inside `format_batch_message()` / the entry formatting path): if `tool_result_text` contains error-indicating patterns (`error`, `FAILED`, `exit code [1-9]`, `Exception`, `Traceback`), prefix with `❌` instead of `⎿`; if contains success patterns (`passed`, `ok`, `success`, `exit code 0`), prefix with `✅`
+- [x] For Bash tool results in batch: extract and show exit code if present in result text (pattern: `Exit code: N` or similar from Claude's Bash tool)
+- [x] Write tests for increased truncation length
+- [x] Write tests for error/success prefix detection in batch entries
+- [x] Write tests for Bash exit code extraction
+- [x] Run tests — must pass before task 5
 
 ### Task 5: Create LLM summarizer module
 
@@ -155,14 +155,14 @@ New module that takes recent transcript context and produces a 1-2 line completi
 - Create: `src/ccgram/llm/summarizer.py`
 - Create: `tests/ccgram/llm/test_summarizer.py`
 
-- [ ] Create `summarizer.py` with:
+- [x] Create `summarizer.py` with:
   - `_SUMMARY_SYSTEM_PROMPT` — instructs the LLM to produce a single-line factual summary (~120 chars max) of what was accomplished, mentioning specific files/tests/commands, noting errors
   - `_build_summary_context(transcript_path: str, max_entries: int = 30) -> str` — reads last N JSONL entries from the transcript file via `await asyncio.to_thread()` (avoid blocking event loop on large files), extracts tool names + key arguments + result snippets (first 200 chars), assistant text (last 500 chars). Returns a compact context string. Returns empty string if file doesn't exist or is empty.
   - `async def summarize_completion(transcript_path: str) -> str | None` — returns None immediately if `transcript_path` is empty or `get_text_completer()` returns None (no LLM configured). Calls `completer.complete()` with the summary prompt and context. Returns the summary text. Catches `RuntimeError` and returns None on LLM failure (logged at warning level).
-- [ ] Keep the context window small (target ~800 tokens input) to minimize latency and cost — only include tool names, file paths, exit codes, final assistant text
-- [ ] Write tests for `_build_summary_context()` with mock JSONL files — verify it extracts the right fields and respects limits
-- [ ] Write tests for `summarize_completion()` — mock completer, verify prompt structure, test None return on no LLM, test error handling
-- [ ] Run tests — must pass before task 6
+- [x] Keep the context window small (target ~800 tokens input) to minimize latency and cost — only include tool names, file paths, exit codes, final assistant text
+- [x] Write tests for `_build_summary_context()` with mock JSONL files — verify it extracts the right fields and respects limits
+- [x] Write tests for `summarize_completion()` — mock completer, verify prompt structure, test None return on no LLM, test error handling
+- [x] Run tests — must pass before task 6
 
 ### Task 6: Integrate LLM summary into completion flow
 
@@ -174,31 +174,31 @@ Wire the summarizer into the Stop hook — fire async, edit the Ready message wh
 - Modify: `src/ccgram/handlers/message_queue.py`
 - Modify: `tests/ccgram/handlers/test_hook_events.py`
 
-- [ ] In `_handle_stop()`: resolve `transcript_path` via `session_manager.get_window_state(window_id)` (may be None for sessions started before bot run — handle gracefully). After enqueuing the enriched Ready status, spawn `asyncio.create_task(_enhance_with_llm_summary(...))` with window_id, user_id, thread_id, transcript_path
-- [ ] Implement `_enhance_with_llm_summary()` in `hook_events.py`:
+- [x] In `_handle_stop()`: resolve `transcript_path` via `session_manager.get_window_state(window_id)` (may be None for sessions started before bot run — handle gracefully). After enqueuing the enriched Ready status, spawn `asyncio.create_task(_enhance_with_llm_summary(...))` with window_id, user_id, thread_id, transcript_path
+- [x] Implement `_enhance_with_llm_summary()` in `hook_events.py`:
   1. Call `summarize_completion(transcript_path)` — returns None if path empty, no LLM, or failure
   2. If result is None → return (static Ready is already showing)
   3. Build enhanced text: replace `"✓ Ready"` header with `"✓ Done — <summary>"`, keep task checklist below
   4. Enqueue the enhanced text as a `status_update` task via `enqueue_status_update()` (use the queue, NOT a direct `bot.edit_message_text()` bypass — this ensures `_status_msg_info` stays in sync and the dedup check sees the new text)
-- [ ] Handle race condition: if the user sends a new message before LLM responds (status message already converted to content), the enqueued status_update creates a new status bubble — acceptable, the summary is still delivered
-- [ ] Write async test verifying the task is spawned, completes gracefully with None summarizer, and doesn't raise unhandled exceptions
-- [ ] Write tests for `_enhance_with_llm_summary()` — mock summarizer, verify enqueue call, verify no-op on None, verify error tolerance
-- [ ] Run tests — must pass before task 7
+- [x] Handle race condition: if the user sends a new message before LLM responds (status message already converted to content), the enqueued status_update creates a new status bubble — acceptable, the summary is still delivered
+- [x] Write async test verifying the task is spawned, completes gracefully with None summarizer, and doesn't raise unhandled exceptions
+- [x] Write tests for `_enhance_with_llm_summary()` — mock summarizer, verify enqueue call, verify no-op on None, verify error tolerance
+- [x] Run tests — must pass before task 7
 
 ### Task 7: Verify acceptance criteria
 
-- [ ] Verify status display shows full text: "📝 Writing tests for auth module" not "📝 writing…"
-- [ ] Verify completion shows enriched Ready with task checklist and turn count
-- [ ] Verify tool batch results show 200 chars with error/success indicators
-- [ ] Verify LLM summary edits Ready message when configured
-- [ ] Verify graceful fallback when LLM is not configured (Tier 1 still works)
-- [ ] Run full test suite: `make check`
+- [x] Verify status display shows full text: "📝 Writing tests for auth module" not "📝 writing…"
+- [x] Verify completion shows enriched Ready with task checklist and turn count
+- [x] Verify tool batch results show 200 chars with error/success indicators
+- [x] Verify LLM summary edits Ready message when configured
+- [x] Verify graceful fallback when LLM is not configured (Tier 1 still works)
+- [x] Run full test suite: `make check`
 
 ### Task 8: [Final] Update documentation
 
-- [ ] Update CLAUDE.md with new output behavior description
-- [ ] Add LLM summarizer to the module inventory in `.claude/rules/architecture.md`
-- [ ] Move this plan to `docs/plans/completed/`
+- [x] Update CLAUDE.md with new output behavior description
+- [x] Add LLM summarizer to the module inventory in `.claude/rules/architecture.md`
+- [x] Move this plan to `docs/plans/completed/`
 
 ## Technical Details
 
