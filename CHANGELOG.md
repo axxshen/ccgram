@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [2.11.2] - 2026-04-26
+
+### Fixed
+- Preserve manually created tmux windows instead of auto-killing them when Telegram topics are stale, missing, or temporarily unreachable.
+- Rebind a surviving same-name Telegram topic to a newly discovered tmux window when the old window is gone and the match is unambiguous.
+- Recreate topics safely when same-name stale topics are already deleted, without deleting or killing the newly discovered tmux window.
+- Adopt unbound windows after session changes as well as new window discovery, preventing reused tmux window IDs from being left topicless until the unbound TTL expires.
+
 ## [2.11.1] - 2026-04-24
 
 ### Fixed
