@@ -32,6 +32,7 @@ dependencies = [
     "pathspec>=0.12",
     "aiohttp>=3.10",
     "edge-tts>=7.2.8",
+    "yarl==1.23.0",
 ]
 
 [project.urls]

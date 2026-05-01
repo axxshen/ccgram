@@ -130,6 +130,7 @@ dependencies = [
     { name = "python-telegram-bot", extra = ["rate-limiter"] },
     { name = "structlog" },
     { name = "telegramify-markdown" },
+    { name = "yarl" },
 ]
 
 [package.optional-dependencies]
@@ -172,6 +173,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "structlog", specifier = ">=24.0.0" },
     { name = "telegramify-markdown", specifier = ">=1.0.0" },
+    { name = "yarl", specifier = "==1.23.0" },
 ]
 provides-extras = ["dev"]
 
