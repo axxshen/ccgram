@@ -73,6 +73,9 @@ def _should_send_tts(task: ContentTask) -> bool:
     return task.role == "assistant"
 
 
+_CAPTION_MAX_LENGTH = 1024  # Telegram Bot API caption limit
+
+
 async def _send_tts_voice(
     bot: Bot,
     chat_id: int,
@@ -89,11 +92,13 @@ async def _send_tts_voice(
 
     voice_file = BytesIO(audio.data)
     voice_file.name = audio.filename
+    caption = text[:_CAPTION_MAX_LENGTH] if len(text) > _CAPTION_MAX_LENGTH else text
     await rate_limit_send(chat_id)
     try:
         await bot.send_voice(
             chat_id=chat_id,
             voice=voice_file,
+            caption=caption,
             **send_kwargs(thread_id),
         )
     except TelegramError as exc:

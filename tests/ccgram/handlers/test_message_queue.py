@@ -528,6 +528,8 @@ class TestTtsVoiceReplyDelivery:
         await _process_content_task(bot, 1, task)
 
         bot.send_voice.assert_awaited_once()
+        _, send_kwargs = bot.send_voice.call_args
+        assert send_kwargs.get("caption") == "Hello"
         mock_send_message.assert_not_called()
         mock_rate_limit.assert_awaited_once_with(123)
         mock_clear_status.assert_awaited_once()
