@@ -169,6 +169,16 @@ class Config:
             "CCGRAM_WHISPER_LANGUAGE", "CCBOT_WHISPER_LANGUAGE"
         )
 
+        # Voice replies (text-to-speech)
+        self.tts_enabled: bool = os.getenv("CCGRAM_TTS_ENABLED", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.tts_voice: str = os.getenv(
+            "CCGRAM_TTS_VOICE", "en-US-EmmaMultilingualNeural"
+        )
+
         # LLM command generation (shell provider) and toolbar config path.
         # toolbar_config_path resolution: env var → ~/.ccgram/toolbar.toml → "".
         # Empty string means "use built-in defaults". The handler layer passes
