@@ -27,6 +27,7 @@ class TestContentTask:
     def test_defaults(self):
         task = ContentTask(window_id="@0", parts=("x",))
         assert task.content_type == "text"
+        assert task.role == "assistant"
         assert task.tool_use_id is None
         assert task.tool_name is None
         assert task.thread_id is None

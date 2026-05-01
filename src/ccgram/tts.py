@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from typing import Iterable
+
 from edge_tts import Communicate
 from edge_tts.exceptions import (
     NoAudioReceived,
@@ -16,9 +17,12 @@ from edge_tts.exceptions import (
     UnknownResponse,
     WebSocketError,
 )
+import structlog
 
 from .config import config
 from .entity_formatting import convert_to_entities
+
+logger = structlog.get_logger()
 
 _PAGINATION_RE = re.compile(r"\n\n\[\d+/\d+\]$")
 _USER_PREFIX = "\U0001f464 "
@@ -70,6 +74,8 @@ async def synthesize_speech(text: str) -> TtsAudio:
             data = chunk.get("data")
             if isinstance(data, (bytes, bytearray)):
                 audio.extend(data)
+            else:
+                logger.warning("Unexpected audio chunk payload type: %s", type(data))
     if not audio:
         msg = "No audio bytes received from Edge TTS"
         raise RuntimeError(msg)

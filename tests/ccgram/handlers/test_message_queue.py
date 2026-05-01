@@ -499,7 +499,7 @@ class TestToolCallsGate:
         assert not mq._tool_msg_ids
 
 
-class TestTtsVoiceReplies:
+class TestTtsVoiceReplyDelivery:
     @patch("ccgram.handlers.message_queue.thread_router")
     @patch("ccgram.handlers.message_queue.clear_status_message", new_callable=AsyncMock)
     @patch(
@@ -514,6 +514,7 @@ class TestTtsVoiceReplies:
         mock_send_message,
         mock_clear_status,
         mock_thread_router,
+        monkeypatch,
     ) -> None:
         from ccgram.config import config
 
@@ -522,13 +523,9 @@ class TestTtsVoiceReplies:
 
         bot = AsyncMock()
         bot.send_voice = AsyncMock()
-        original_enabled = config.tts_enabled
-        config.tts_enabled = True
-        try:
-            task = ContentTask(window_id="@0", parts=("Hello",), thread_id=7)
-            await _process_content_task(bot, 1, task)
-        finally:
-            config.tts_enabled = original_enabled
+        monkeypatch.setattr(config, "tts_enabled", True)
+        task = ContentTask(window_id="@0", parts=("Hello",), thread_id=7)
+        await _process_content_task(bot, 1, task)
 
         bot.send_voice.assert_awaited_once()
         mock_send_message.assert_not_called()
