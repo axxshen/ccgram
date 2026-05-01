@@ -128,6 +128,8 @@ All settings accept both CLI flags and environment variables. CLI flags take pre
 | `CCGRAM_WHISPER_BASE_URL` / `--whisper-base-url`     | _(provider default)_ | Custom OpenAI-compatible endpoint URL                                                  |
 | `CCGRAM_WHISPER_MODEL` / `--whisper-model`           | _(provider default)_ | Model override (e.g., `whisper-large-v3-turbo`)                                        |
 | `CCGRAM_WHISPER_LANGUAGE` / `--whisper-language`     | _(auto-detect)_      | Force language code (e.g., `en`, `zh`)                                                 |
+| `CCGRAM_TTS_ENABLED`                                 | `false`              | Enable Edge TTS voice replies in Telegram                                              |
+| `CCGRAM_TTS_VOICE`                                   | `en-US-EmmaMultilingualNeural` | Edge TTS voice name                                                               |
 | `CCGRAM_LLM_PROVIDER`                                | _(empty = disabled)_ | LLM provider for shell command generation                                              |
 | `CCGRAM_LLM_API_KEY`                                 | _(empty)_            | API key for LLM provider (env only)                                                    |
 | `CCGRAM_LLM_BASE_URL`                                | _(from provider)_    | Custom LLM API endpoint                                                                |
@@ -198,6 +200,30 @@ CCGRAM_WHISPER_LANGUAGE=en                     # omit for auto-detect
 In shell topics, voice transcriptions are automatically routed through the LLM for command generation (if `CCGRAM_LLM_PROVIDER` is set). In agent topics, the transcribed text is sent directly to the agent.
 
 Leave `CCGRAM_WHISPER_PROVIDER` empty (the default) to disable voice transcription.
+
+## Voice Replies (Edge TTS)
+
+Enable text-to-speech so assistant replies are delivered as Telegram voice messages.
+
+### Setup
+
+```ini
+CCGRAM_TTS_ENABLED=true
+CCGRAM_TTS_VOICE=en-US-EmmaMultilingualNeural
+```
+
+Restart `ccgram` after setting the env vars. Replies from agents will arrive as voice messages; if TTS fails, the bot falls back to text.
+
+To browse available voices:
+
+```bash
+uv run python - <<'PY'
+import asyncio
+import edge_tts
+voices = asyncio.run(edge_tts.list_voices())
+print([v["ShortName"] for v in voices][:10])
+PY
+```
 
 ## Tmux Session Auto-Detection
 

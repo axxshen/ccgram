@@ -8,20 +8,29 @@ tool-use batching lives in ``tool_batch``.
 
 import asyncio
 import contextlib
+from io import BytesIO
 from typing import assert_never
 
 import structlog
 from telegram import Bot
 from telegram.error import RetryAfter, TelegramError
 
+from ..config import config
 from ..thread_router import thread_router
 from ..topic_state_registry import topic_state
+from ..tts import TTS_ERRORS, prepare_tts_text, synthesize_speech
 from ..utils import task_done_callback
 from ..window_query import is_tool_calls_hidden
-from .message_sender import edit_with_fallback, rate_limit_send_message, send_kwargs
+from .message_sender import (
+    edit_with_fallback,
+    rate_limit_send,
+    rate_limit_send_message,
+    send_kwargs,
+)
 from .message_task import (
     ContentTask,
     ContentType,
+    MessageRole,
     MessageTask,
     StatusClearTask,
     StatusUpdateTask,
@@ -54,6 +63,43 @@ _queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
 # Map (tool_use_id, user_id, thread_key) -> telegram message_id
 # for editing tool_use messages with results
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
+
+
+def _should_send_tts(task: ContentTask) -> bool:
+    if not config.tts_enabled:
+        return False
+    if task.content_type != "text":
+        return False
+    return task.role == "assistant"
+
+
+async def _send_tts_voice(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int | None,
+    text: str,
+    *,
+    window_id: str,
+) -> bool:
+    try:
+        audio = await synthesize_speech(text)
+    except TTS_ERRORS as exc:
+        logger.warning("TTS synthesis failed for %s: %s", window_id, exc)
+        return False
+
+    voice_file = BytesIO(audio.data)
+    voice_file.name = audio.filename
+    await rate_limit_send(chat_id)
+    try:
+        await bot.send_voice(
+            chat_id=chat_id,
+            voice=voice_file,
+            **send_kwargs(thread_id),
+        )
+    except TelegramError as exc:
+        logger.warning("Failed to send TTS voice for %s: %s", window_id, exc)
+        return False
+    return True
 
 
 def get_message_queue(user_id: int) -> asyncio.Queue[MessageTask] | None:
@@ -102,6 +148,8 @@ def _can_merge_tasks(base: ContentTask, candidate: MessageTask) -> bool:
     if not isinstance(candidate, ContentTask):
         return False
     if base.window_id != candidate.window_id:
+        return False
+    if base.role != candidate.role:
         return False
     if base.content_type in ("tool_use", "tool_result"):
         return False
@@ -159,6 +207,7 @@ async def _merge_content_tasks(
             parts=tuple(merged_parts),
             tool_use_id=first.tool_use_id,
             content_type=first.content_type,
+            role=first.role,
             thread_id=first.thread_id,
         ),
         merge_count,
@@ -344,6 +393,20 @@ async def _process_content_task(bot: Bot, user_id: int, task: ContentTask) -> No
                 return
             logger.debug("Failed to edit tool msg %s, sending new", edit_msg_id)
 
+    if _should_send_tts(task):
+        tts_text = prepare_tts_text(task.parts)
+        if tts_text:
+            sent_voice = await _send_tts_voice(
+                bot,
+                chat_id,
+                task.thread_id,
+                tts_text,
+                window_id=task.window_id,
+            )
+            if sent_voice:
+                await clear_status_message(bot, user_id, tkey)
+                return
+
     first_part = True
     last_msg_id: int | None = None
     for part in task.parts:
@@ -381,6 +444,7 @@ async def enqueue_content_message(
     tool_use_id: str | None = None,
     tool_name: str | None = None,
     content_type: ContentType = "text",
+    role: MessageRole = "assistant",
     thread_id: int | None = None,
 ) -> None:
     """Enqueue a content message task."""
@@ -394,6 +458,7 @@ async def enqueue_content_message(
         tool_use_id=tool_use_id,
         tool_name=tool_name,
         content_type=content_type,
+        role=role,
         thread_id=thread_id,
     )
     queue.put_nowait(task)

@@ -13,6 +13,7 @@ from ccgram.handlers.message_queue import (
     _dispatch,
     _handle_content_task,
     _merge_content_tasks,
+    _process_content_task,
     get_or_create_queue,
     shutdown_workers,
 )
@@ -22,6 +23,7 @@ from ccgram.handlers.message_task import (
     StatusClearTask,
     StatusUpdateTask,
 )
+from ccgram.tts import TtsAudio
 
 
 @pytest.fixture
@@ -495,3 +497,37 @@ class TestToolCallsGate:
         ct = _content_task("tool", content_type="tool_use", tool_use_id="t-xyz")
         await _handle_content_task(bot, 1, ct, queue, lock)
         assert not mq._tool_msg_ids
+
+
+class TestTtsVoiceReplyDelivery:
+    @patch("ccgram.handlers.message_queue.thread_router")
+    @patch("ccgram.handlers.message_queue.clear_status_message", new_callable=AsyncMock)
+    @patch(
+        "ccgram.handlers.message_queue.rate_limit_send_message", new_callable=AsyncMock
+    )
+    @patch("ccgram.handlers.message_queue.rate_limit_send", new_callable=AsyncMock)
+    @patch("ccgram.handlers.message_queue.synthesize_speech", new_callable=AsyncMock)
+    async def test_sends_voice_when_enabled(
+        self,
+        mock_synthesize,
+        mock_rate_limit,
+        mock_send_message,
+        mock_clear_status,
+        mock_thread_router,
+        monkeypatch,
+    ) -> None:
+        from ccgram.config import config
+
+        mock_thread_router.resolve_chat_id.return_value = 123
+        mock_synthesize.return_value = TtsAudio(data=b"audio")
+
+        bot = AsyncMock()
+        bot.send_voice = AsyncMock()
+        monkeypatch.setattr(config, "tts_enabled", True)
+        task = ContentTask(window_id="@0", parts=("Hello",), thread_id=7)
+        await _process_content_task(bot, 1, task)
+
+        bot.send_voice.assert_awaited_once()
+        mock_send_message.assert_not_called()
+        mock_rate_limit.assert_awaited_once_with(123)
+        mock_clear_status.assert_awaited_once()
