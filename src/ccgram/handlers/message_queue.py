@@ -30,6 +30,7 @@ from .message_sender import (
 from .message_task import (
     ContentTask,
     ContentType,
+    MessageRole,
     MessageTask,
     StatusClearTask,
     StatusUpdateTask,
@@ -63,17 +64,13 @@ _queue_locks: dict[int, asyncio.Lock] = {}  # Protect drain/refill operations
 # for editing tool_use messages with results
 _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 
-_USER_PREFIX = "\U0001f464 "
-
 
 def _should_send_tts(task: ContentTask) -> bool:
     if not config.tts_enabled:
         return False
     if task.content_type != "text":
         return False
-    if not task.parts:
-        return False
-    return not task.parts[0].startswith(_USER_PREFIX)
+    return task.role == "assistant"
 
 
 async def _send_tts_voice(
@@ -152,6 +149,8 @@ def _can_merge_tasks(base: ContentTask, candidate: MessageTask) -> bool:
         return False
     if base.window_id != candidate.window_id:
         return False
+    if base.role != candidate.role:
+        return False
     if base.content_type in ("tool_use", "tool_result"):
         return False
     return candidate.content_type not in ("tool_use", "tool_result")
@@ -208,6 +207,7 @@ async def _merge_content_tasks(
             parts=tuple(merged_parts),
             tool_use_id=first.tool_use_id,
             content_type=first.content_type,
+            role=first.role,
             thread_id=first.thread_id,
         ),
         merge_count,
@@ -444,6 +444,7 @@ async def enqueue_content_message(
     tool_use_id: str | None = None,
     tool_name: str | None = None,
     content_type: ContentType = "text",
+    role: MessageRole = "assistant",
     thread_id: int | None = None,
 ) -> None:
     """Enqueue a content message task."""
@@ -457,6 +458,7 @@ async def enqueue_content_message(
         tool_use_id=tool_use_id,
         tool_name=tool_name,
         content_type=content_type,
+        role=role,
         thread_id=thread_id,
     )
     queue.put_nowait(task)
