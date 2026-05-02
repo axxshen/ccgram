@@ -178,6 +178,9 @@ class Config:
         self.tts_voice: str = os.getenv(
             "CCGRAM_TTS_VOICE", "en-US-EmmaMultilingualNeural"
         )
+        self.tts_rate: str = os.getenv("CCGRAM_TTS_RATE", "+0%")
+        self.tts_pitch: str = os.getenv("CCGRAM_TTS_PITCH", "+0Hz")
+        self.tts_volume: str = os.getenv("CCGRAM_TTS_VOLUME", "+0%")
 
         # LLM command generation (shell provider) and toolbar config path.
         # toolbar_config_path resolution: env var → ~/.ccgram/toolbar.toml → "".

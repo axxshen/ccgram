@@ -130,6 +130,9 @@ All settings accept both CLI flags and environment variables. CLI flags take pre
 | `CCGRAM_WHISPER_LANGUAGE` / `--whisper-language`     | _(auto-detect)_      | Force language code (e.g., `en`, `zh`)                                                 |
 | `CCGRAM_TTS_ENABLED`                                 | `false`              | Enable Edge TTS voice replies in Telegram                                              |
 | `CCGRAM_TTS_VOICE`                                   | `en-US-EmmaMultilingualNeural` | Edge TTS voice name                                                               |
+| `CCGRAM_TTS_RATE`                                    | `+0%`                | Speaking rate adjustment (e.g. `+20%`, `-10%`)                                        |
+| `CCGRAM_TTS_PITCH`                                   | `+0Hz`               | Pitch adjustment in Hz (e.g. `+8Hz`, `-5Hz`)                                          |
+| `CCGRAM_TTS_VOLUME`                                  | `+0%`                | Volume adjustment (e.g. `+6%`, `-10%`)                                                |
 | `CCGRAM_LLM_PROVIDER`                                | _(empty = disabled)_ | LLM provider for shell command generation                                              |
 | `CCGRAM_LLM_API_KEY`                                 | _(empty)_            | API key for LLM provider (env only)                                                    |
 | `CCGRAM_LLM_BASE_URL`                                | _(from provider)_    | Custom LLM API endpoint                                                                |
@@ -210,6 +213,10 @@ Enable text-to-speech so assistant replies are delivered as Telegram voice messa
 ```ini
 CCGRAM_TTS_ENABLED=true
 CCGRAM_TTS_VOICE=en-US-EmmaMultilingualNeural
+# Optional tuning
+CCGRAM_TTS_RATE=+0%    # speaking speed (e.g. +20% faster, -10% slower)
+CCGRAM_TTS_PITCH=+0Hz  # pitch in Hz (e.g. +8Hz higher, -5Hz lower)
+CCGRAM_TTS_VOLUME=+0%  # volume (e.g. +6% louder, -10% quieter)
 ```
 
 Restart `ccgram` after setting the env vars. Replies from agents will arrive as voice messages; if TTS fails, the bot falls back to text.

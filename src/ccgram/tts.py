@@ -67,7 +67,13 @@ async def synthesize_speech(text: str) -> TtsAudio:
         msg = "Cannot synthesize empty text"
         raise ValueError(msg)
     voice = config.tts_voice or "en-US-EmmaMultilingualNeural"
-    communicate = Communicate(text, voice=voice)
+    communicate = Communicate(
+        text,
+        voice=voice,
+        rate=config.tts_rate,
+        pitch=config.tts_pitch,
+        volume=config.tts_volume,
+    )
     audio = bytearray()
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
