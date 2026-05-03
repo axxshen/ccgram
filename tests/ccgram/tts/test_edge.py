@@ -13,6 +13,7 @@ async def test_synthesize_collects_audio_chunks(monkeypatch):
             yield {"type": "audio", "data": b"chunk2"}
             yield {"type": "other", "data": b"ignored"}
 
+    monkeypatch.setattr("ccgram.tts.edge._edge_tts_available", True)
     monkeypatch.setattr("ccgram.tts.edge.Communicate", DummyCommunicate)
     synth = EdgeTtsSynthesizer(voice="en-US-TestVoice")
     result = await synth.synthesize("Hello world")
@@ -33,6 +34,7 @@ async def test_synthesize_wraps_edge_no_audio_as_tts_error(monkeypatch):
         async def stream(self):
             yield {"type": "metadata", "data": b""}
 
+    monkeypatch.setattr("ccgram.tts.edge._edge_tts_available", True)
     monkeypatch.setattr("ccgram.tts.edge.Communicate", DummyCommunicate)
     synth = EdgeTtsSynthesizer(voice="en-US-TestVoice")
     with pytest.raises(TtsSynthesisError):
@@ -50,6 +52,7 @@ async def test_synthesize_wraps_edge_exceptions_as_tts_error(monkeypatch):
             raise WebSocketError("connection dropped")
             yield  # make it a generator
 
+    monkeypatch.setattr("ccgram.tts.edge._edge_tts_available", True)
     monkeypatch.setattr("ccgram.tts.edge.Communicate", FailingCommunicate)
     synth = EdgeTtsSynthesizer(voice="en-US-TestVoice")
     with pytest.raises(TtsSynthesisError):
