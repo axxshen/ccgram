@@ -1248,14 +1248,21 @@ def _write_codex_session(
     cwd: str,
     *,
     source: object = "cli",
+    originator: object = "codex_cli_rs",
 ) -> Path:
+    """Write a fake Codex session JSONL.
+
+    ``source`` and ``originator`` mirror the keys real Codex writes into the
+    ``session_meta`` payload. Pass ``originator=None`` to omit the field
+    entirely (simulating older transcripts that predate the field).
+    """
     day_dir = sessions_dir / date_parts
     day_dir.mkdir(parents=True, exist_ok=True)
     fpath = day_dir / f"{name}.jsonl"
-    meta = {
-        "type": "session_meta",
-        "payload": {"id": session_id, "cwd": cwd, "source": source},
-    }
+    payload: dict[str, object] = {"id": session_id, "cwd": cwd, "source": source}
+    if originator is not None:
+        payload["originator"] = originator
+    meta = {"type": "session_meta", "payload": payload}
     fpath.write_text(json.dumps(meta) + "\n")
     return fpath
 
@@ -1408,6 +1415,97 @@ class TestCodexDiscoverTranscript:
         codex = CodexProvider()
         with patch.object(Path, "home", return_value=tmp_path):
             event = codex.discover_transcript("/my/project", "ccgram:@7")
+        assert event is None
+
+    def test_skips_codex_exec_session(self, tmp_path: Path) -> None:
+        """``codex exec`` runs (originator=codex_exec) must not be claimed by
+        hookless discovery, even if a real interactive session exists in the
+        same cwd. The interactive session wins."""
+        sessions_dir = tmp_path / ".codex" / "sessions"
+        _write_codex_session(
+            sessions_dir,
+            "2026/03/01",
+            "main",
+            "uuid-main",
+            "/my/project",
+        )
+        time.sleep(0.05)
+        _write_codex_session(
+            sessions_dir,
+            "2026/03/02",
+            "exec-run",
+            "uuid-exec",
+            "/my/project",
+            source="exec",
+            originator="codex_exec",
+        )
+
+        codex = CodexProvider()
+        with patch.object(Path, "home", return_value=tmp_path):
+            event = codex.discover_transcript("/my/project", "ccgram:@7")
+        assert event is not None
+        assert event.session_id == "uuid-main"
+
+    def test_codex_desktop_exec_survives_filter(self, tmp_path: Path) -> None:
+        """Codex Desktop legitimately writes ``source = "exec"`` while keeping
+        a non-``codex_exec`` originator. Those sessions must survive the
+        filter."""
+        sessions_dir = tmp_path / ".codex" / "sessions"
+        _write_codex_session(
+            sessions_dir,
+            "2026/03/02",
+            "desktop-exec",
+            "uuid-desktop",
+            "/my/project",
+            source="exec",
+            originator="Codex Desktop",
+        )
+
+        codex = CodexProvider()
+        with patch.object(Path, "home", return_value=tmp_path):
+            event = codex.discover_transcript("/my/project", "ccgram:@7")
+        assert event is not None
+        assert event.session_id == "uuid-desktop"
+
+    def test_missing_originator_field_is_kept(self, tmp_path: Path) -> None:
+        """Older Codex transcripts predate the ``originator`` field. Absence of
+        the field must be treated as fail-safe-open (keep the session)."""
+        sessions_dir = tmp_path / ".codex" / "sessions"
+        _write_codex_session(
+            sessions_dir,
+            "2026/03/02",
+            "no-originator",
+            "uuid-bare",
+            "/my/project",
+            originator=None,
+        )
+
+        codex = CodexProvider()
+        with patch.object(Path, "home", return_value=tmp_path):
+            event = codex.discover_transcript("/my/project", "ccgram:@7")
+        assert event is not None
+        assert event.session_id == "uuid-bare"
+
+    def test_skips_codex_exec_when_only_match(self, tmp_path: Path) -> None:
+        """Reproduce the production bug: when the only cwd-matching session is
+        a ``codex exec`` run, discovery must return ``None`` rather than bind
+        the wrong session."""
+        sessions_dir = tmp_path / ".codex" / "sessions"
+        _write_codex_session(
+            sessions_dir,
+            "2026/03/02",
+            "only-exec",
+            "uuid-exec",
+            "/Users/yubai/Obsidian/byheaven",
+            source="exec",
+            originator="codex_exec",
+        )
+
+        codex = CodexProvider()
+        with patch.object(Path, "home", return_value=tmp_path):
+            event = codex.discover_transcript(
+                "/Users/yubai/Obsidian/byheaven", "ccgram:@14"
+            )
         assert event is None
 
 

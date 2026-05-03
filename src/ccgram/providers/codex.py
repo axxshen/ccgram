@@ -553,12 +553,28 @@ def _is_primary_codex_session(meta: dict[str, Any]) -> bool:
 
     Hookless discovery should bind a tmux window to the main user-visible
     conversation, not transient guardian/subagent transcripts created for
-    approvals or delegated work. Those transcripts share the same cwd and can be
+    approvals or delegated work, nor non-interactive ``codex exec`` runs that
+    happen to share a cwd with a real interactive session. All of those write
+    JSONL transcripts under the same ``~/.codex/sessions/`` tree and can be
     newer than the main transcript, so they must be filtered out here.
+
+    Filtering precedence:
+
+    * ``originator == "codex_exec"`` -> non-interactive ``codex exec``; never
+      bind regardless of ``source``. Some ``codex exec`` runs report
+      ``source = "exec"`` and others report no ``source`` field at all, so the
+      originator check must happen before the ``source`` branches below.
+    * Non-dict ``source`` (string such as ``"cli"`` / ``"exec"``, or missing) ->
+      treated as a primary session. This covers ``codex_cli_rs`` interactive
+      sessions and Codex Desktop variants that legitimately set
+      ``source = "exec"`` but whose ``originator`` is not ``codex_exec``.
+    * Dict ``source`` -> filter out anything carrying a ``subagent`` key
+      (guardian / delegated work).
     """
+    originator = meta.get("originator")
+    if isinstance(originator, str) and originator == "codex_exec":
+        return False
     source = meta.get("source")
-    if isinstance(source, str):
-        return True
     if not isinstance(source, dict):
         return True
     return "subagent" not in source
