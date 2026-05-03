@@ -6,6 +6,10 @@ a bot token. With --fix, auto-repairs what it can (install hook, kill orphans).
 Provider-aware: reads CCGRAM_PROVIDER env to determine which checks apply
 (e.g. hook checks are skipped for providers without hook support).
 No Config import needed — uses utils.ccgram_dir() and subprocess.
+``hook`` helpers (``_claude_settings_file``, ``get_installed_events``,
+``_install_hook``) are imported lazily inside ``_check_hooks`` /
+``_fix_hooks`` so ``ccgram doctor`` startup avoids the hook subprocess
+machinery on providers that have no hooks.
 """
 
 import json
@@ -54,6 +58,7 @@ def _check_tmux() -> tuple[str, str]:
 
 def _check_provider_command(provider_name: str) -> tuple[str, str]:
     """Check provider CLI command availability."""
+    # Lazy: providers package pulls in PTB; defer until doctor runs
     from ccgram.providers import resolve_launch_command
 
     cmd = resolve_launch_command(provider_name)
@@ -86,6 +91,7 @@ def _check_hooks() -> tuple[str, str, dict[str, bool]]:
 
     Returns (status, message, event_status_dict).
     """
+    # Lazy: hook helpers reach back into bot wiring; defer until doctor runs
     from .hook import _claude_settings_file, get_installed_events
 
     settings_file = _claude_settings_file()
@@ -131,6 +137,7 @@ def _check_config_dir() -> tuple[str, str]:
 
 def _check_bot_token() -> tuple[str, str]:
     """Check bot token is set (without printing it)."""
+    # Lazy: dotenv is optional
     from dotenv import load_dotenv
 
     config_dir = ccgram_dir()
@@ -270,6 +277,7 @@ def _fix_hooks(event_status: dict[str, bool], fix: bool) -> None:
     missing = [e for e, v in event_status.items() if not v]
     if not missing:
         return
+    # Lazy: hook helpers reach back into bot wiring; defer until doctor runs
     from .hook import _install_hook
 
     result = _install_hook()

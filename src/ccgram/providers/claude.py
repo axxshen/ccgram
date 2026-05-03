@@ -312,6 +312,8 @@ class ClaudeProvider:
         if capture_fn is not None:
             _fn: Callable[[str], Awaitable[str | None]] = capture_fn
         else:
+            # Lazy: tmux_manager imports providers; lazy fallback avoids the
+            # cycle when tests inject capture_fn directly.
             from ccgram.tmux_manager import tmux_manager
 
             _fn = tmux_manager.capture_pane
@@ -332,8 +334,10 @@ class ClaudeProvider:
         transcript_path: str,
     ) -> None:
         """Seed Claude task-tracking state by reading the full transcript once."""
+        # Lazy: aiofiles is heavy; defer until the JSONL reader actually opens a file
         import aiofiles
 
+        # Lazy: claude_task_state ↔ claude provider cycle
         from ccgram.claude_task_state import claude_task_state
 
         entries: list[dict] = []
@@ -355,6 +359,7 @@ class ClaudeProvider:
         entries: list[dict],
     ) -> None:
         """Apply parsed transcript entries to Claude task-tracking state."""
+        # Lazy: claude_task_state ↔ claude provider cycle
         from ccgram.claude_task_state import claude_task_state
 
         claude_task_state.apply_entries(window_id, session_id, entries)

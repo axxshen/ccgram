@@ -51,10 +51,19 @@ def _ensure_registered() -> None:
     global _registered
     if _registered:
         return
+    # Lazy: provider classes register against the registry at import; defer until the registry factory runs
     from ccgram.providers.claude import ClaudeProvider
+
+    # Lazy: provider classes register against the registry at import; defer until the registry factory runs
     from ccgram.providers.codex import CodexProvider
+
+    # Lazy: provider classes register against the registry at import; defer until the registry factory runs
     from ccgram.providers.gemini import GeminiProvider
+
+    # Lazy: provider classes register against the registry at import; defer until the registry factory runs
     from ccgram.providers.pi import PiProvider
+
+    # Lazy: provider classes register against the registry at import; defer until the registry factory runs
     from ccgram.providers.shell import ShellProvider
 
     registry.register("claude", ClaudeProvider)
@@ -76,6 +85,8 @@ def get_provider() -> AgentProvider:
     if _active is None:
         _ensure_registered()
 
+        # Lazy: config singleton is wired late at startup; importing at top
+        # would freeze test overrides that monkeypatch config attrs.
         from ccgram.config import config
 
         try:
@@ -132,6 +143,10 @@ def detect_provider_from_command(pane_current_command: str) -> str:
         if basename == name or basename.startswith(name + "-"):
             return name
 
+    # Lazy: providers.shell pulls in shell_infra (prompt-marker machinery
+    # + readline lookups) at import; only load when we have to fall
+    # through to shell-process detection.
+    # Lazy: shell provider is the only one that needs KNOWN_SHELLS
     from .shell import KNOWN_SHELLS
 
     if basename in KNOWN_SHELLS or basename.lstrip("-") in KNOWN_SHELLS:
@@ -215,6 +230,8 @@ async def detect_provider_from_pane(
             return ""
         basename = os.path.basename(cmd.split()[0])
         if basename in JS_RUNTIMES:
+            # Lazy: process_detection forks `ps` subprocesses; only worth
+            # loading when the pane command is a JS runtime wrapper.
             from .process_detection import detect_provider_cached
 
             detected = await detect_provider_cached(window_id or "", pane_tty)
@@ -256,6 +273,8 @@ def resolve_launch_command(
     # CCGRAM_GEMINI_COMMAND overrides stay fully user-controlled.
     # For ccgram-managed Gemini launches, force stable shell mode defaults.
     if provider == "gemini" and not override:
+        # Lazy: only the gemini launch path needs the hardener; importing at
+        # top would pull gemini provider code on every provider resolution.
         from ccgram.providers.gemini import build_hardened_gemini_launch_command
 
         command = build_hardened_gemini_launch_command(command)

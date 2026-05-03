@@ -29,6 +29,7 @@ import libtmux
 from libtmux.exc import LibTmuxException
 
 from .config import config
+from .thread_router import thread_router
 from .topic_state_registry import topic_state
 from .window_resolver import EMDASH_SESSION_PREFIX as _EMDASH_PREFIX, is_foreign_window
 
@@ -856,9 +857,13 @@ class TmuxManager:
         if proc.returncode != 0:
             return []
 
+        # Lazy: providers/__init__.py reaches back into tmux_manager via
+        # process_detection; tmux_manager (infra) must not import domain
+        # (providers) at module level.
+        # Lazy: providers reach back into tmux_manager during process detection
         from .providers import (
             detect_provider_from_command,
-        )  # local: infra must not import domain at module level
+        )
 
         results: list[TmuxWindow] = []
         for line in win_stdout.decode().strip().split("\n"):
@@ -1164,7 +1169,6 @@ async def send_to_window(
     Returns (success, message). Looks up the display name for logging, then
     delegates to tmux_manager.find_window_by_id + send_keys.
     """
-    from .thread_router import thread_router
 
     display = thread_router.get_display_name(window_id)
     logger.debug(

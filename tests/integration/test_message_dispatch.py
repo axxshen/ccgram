@@ -62,17 +62,17 @@ async def app():
     application = Application.builder().token(token).build()
 
     from ccgram.bot import (
-        forward_command_handler,
         history_command,
         new_command,
-        sessions_command,
         text_handler,
-        topic_closed_handler,
     )
     from ccgram.handlers.callback_registry import (
         dispatch as callback_handler,
         load_handlers,
     )
+    from ccgram.handlers.commands import forward_command_handler
+    from ccgram.handlers.sessions_dashboard import sessions_command
+    from ccgram.handlers.topics.topic_lifecycle import topic_closed_handler
 
     load_handlers()
     from telegram.ext import (
@@ -112,8 +112,14 @@ async def test_text_routed_to_text_handler(app) -> None:
     update = _make_update("hello world", bot=app.bot)
 
     with (
-        patch("ccgram.bot.handle_text_message", new_callable=AsyncMock) as mock_handler,
-        patch("ccgram.bot.is_user_allowed", return_value=True),
+        patch(
+            "ccgram.handlers.text.text_handler.handle_text_message",
+            new_callable=AsyncMock,
+        ) as mock_handler,
+        patch(
+            "ccgram.handlers.text.text_handler.config.is_user_allowed",
+            return_value=True,
+        ),
     ):
         await app.process_update(update)
         mock_handler.assert_awaited_once()
@@ -123,8 +129,15 @@ async def test_unauthorized_user_rejected(app) -> None:
     update = _make_update("hello", bot=app.bot, user_id=99999)
 
     with (
-        patch("ccgram.bot.handle_text_message", new_callable=AsyncMock) as mock_handler,
-        patch("ccgram.bot.is_user_allowed", return_value=False),
+        patch(
+            "ccgram.handlers.text.text_handler.handle_text_message",
+            new_callable=AsyncMock,
+        ) as mock_handler,
+        patch(
+            "ccgram.handlers.text.text_handler.config.is_user_allowed",
+            return_value=False,
+        ),
+        patch("ccgram.handlers.text.text_handler.safe_reply", new_callable=AsyncMock),
     ):
         await app.process_update(update)
         mock_handler.assert_not_awaited()
@@ -134,8 +147,13 @@ async def test_new_command_dispatched(app) -> None:
     update = _make_update("/new", bot=app.bot)
 
     with (
-        patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
-        patch("ccgram.bot.is_user_allowed", return_value=True),
+        patch(
+            "ccgram.handlers.topics.new_command.safe_reply", new_callable=AsyncMock
+        ) as mock_reply,
+        patch(
+            "ccgram.handlers.topics.new_command.config.is_user_allowed",
+            return_value=True,
+        ),
     ):
         await app.process_update(update)
         mock_reply.assert_awaited_once()
@@ -145,9 +163,16 @@ async def test_history_command_dispatched(app) -> None:
     update = _make_update("/history", bot=app.bot)
 
     with (
-        patch("ccgram.bot.is_user_allowed", return_value=True),
-        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value=None),
-        patch("ccgram.bot.safe_reply", new_callable=AsyncMock) as mock_reply,
+        patch(
+            "ccgram.handlers.recovery.history.config.is_user_allowed", return_value=True
+        ),
+        patch(
+            "ccgram.handlers.recovery.history.thread_router.resolve_window_for_thread",
+            return_value=None,
+        ),
+        patch(
+            "ccgram.handlers.recovery.history.safe_reply", new_callable=AsyncMock
+        ) as mock_reply,
     ):
         await app.process_update(update)
         mock_reply.assert_awaited_once()
@@ -157,20 +182,29 @@ async def test_unknown_command_forwarded(app) -> None:
     update = _make_update("/sometool", bot=app.bot)
 
     with (
-        patch("ccgram.bot.is_user_allowed", return_value=True),
-        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value="@0"),
         patch(
-            "ccgram.handlers.command_orchestration.tmux_manager.find_window_by_id",
+            "ccgram.handlers.commands.forward.config.is_user_allowed",
+            return_value=True,
+        ),
+        patch(
+            "ccgram.handlers.commands.forward.thread_router.resolve_window_for_thread",
+            return_value="@0",
+        ),
+        patch(
+            "ccgram.handlers.commands.forward.tmux_manager.find_window_by_id",
             new_callable=AsyncMock,
             return_value=MagicMock(window_id="@0"),
         ),
         patch(
-            "ccgram.handlers.command_orchestration.send_to_window",
+            "ccgram.handlers.commands.forward.send_to_window",
             new_callable=AsyncMock,
             return_value=(True, "Sent"),
         ),
-        patch("ccgram.bot.thread_router.get_display_name", return_value="test-win"),
-        patch("ccgram.bot.safe_reply", new_callable=AsyncMock),
+        patch(
+            "ccgram.handlers.commands.forward.thread_router.get_display_name",
+            return_value="test-win",
+        ),
+        patch("ccgram.handlers.commands.forward.safe_reply", new_callable=AsyncMock),
         patch.object(Chat, "send_action", new_callable=AsyncMock),
     ):
         await app.process_update(update)
@@ -181,10 +215,18 @@ async def test_command_priority_over_text(app) -> None:
     update = _make_update("/history", bot=app.bot)
 
     with (
-        patch("ccgram.bot.is_user_allowed", return_value=True),
-        patch("ccgram.bot.handle_text_message", new_callable=AsyncMock) as mock_text,
-        patch("ccgram.bot.thread_router.resolve_window_for_thread", return_value=None),
-        patch("ccgram.bot.safe_reply", new_callable=AsyncMock),
+        patch(
+            "ccgram.handlers.recovery.history.config.is_user_allowed", return_value=True
+        ),
+        patch(
+            "ccgram.handlers.text.text_handler.handle_text_message",
+            new_callable=AsyncMock,
+        ) as mock_text,
+        patch(
+            "ccgram.handlers.recovery.history.thread_router.resolve_window_for_thread",
+            return_value=None,
+        ),
+        patch("ccgram.handlers.recovery.history.safe_reply", new_callable=AsyncMock),
     ):
         await app.process_update(update)
         mock_text.assert_not_awaited()

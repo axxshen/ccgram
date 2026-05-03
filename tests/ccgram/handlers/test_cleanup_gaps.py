@@ -1,19 +1,19 @@
 import asyncio
 
-from ccgram.handlers.interactive_ui import (
+from ccgram.handlers.interactive.interactive_ui import (
     _send_cooldowns,
     clear_send_cooldowns,
 )
-from ccgram.handlers.text_handler import (
+from ccgram.handlers.text.text_handler import (
     _bash_capture_tasks,
     cancel_bash_capture,
 )
-from ccgram.handlers.topic_emoji import (
+from ccgram.handlers.status.topic_emoji import (
     _MAX_DISABLED_CHATS,
     _disabled_chats,
     clear_disabled_chat,
 )
-from ccgram.handlers.topic_orchestration import (
+from ccgram.handlers.topics.topic_orchestration import (
     _topic_create_retry_until,
     clear_topic_create_retry,
 )

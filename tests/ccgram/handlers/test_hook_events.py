@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -173,7 +173,7 @@ class TestHandleStop:
             await dispatch_hook_event(event, bot)
 
             mock_emoji.assert_not_called()
-            mock_enqueue.assert_called_once_with(bot, 100, "@0", None, thread_id=42)
+            mock_enqueue.assert_called_once_with(ANY, 100, "@0", None, thread_id=42)
 
     async def test_stop_no_users_skips(self, monkeypatch) -> None:
         monkeypatch.setattr(
@@ -311,7 +311,9 @@ class TestHandleNotification:
             await dispatch_hook_event(event, bot)
 
             mock_set.assert_called_once_with(100, "@0", 42)
-            mock_handle.assert_called_once_with(bot, 100, "@0", 42)
+            mock_handle.assert_called_once()
+            assert mock_handle.call_args.args[0] is bot
+            assert mock_handle.call_args.args[1:] == (100, "@0", 42)
 
     async def test_skips_when_already_interactive(self, monkeypatch) -> None:
         monkeypatch.setattr(
@@ -389,7 +391,7 @@ class TestHandleNotification:
             await dispatch_hook_event(event, bot)
 
             assert claude_task_state.get_wait_header("@0") == "Approval needed: Bash"
-            mock_enqueue.assert_awaited_once_with(bot, 100, "@0", None, thread_id=42)
+            mock_enqueue.assert_awaited_once_with(ANY, 100, "@0", None, thread_id=42)
 
 
 class TestHandleSubagentStart:
@@ -558,7 +560,7 @@ class TestHandleTeammateIdle:
             )
             await dispatch_hook_event(event, bot)
             mock_enqueue.assert_called_once_with(
-                bot,
+                ANY,
                 100,
                 "@0",
                 "\U0001f4a4 Teammate 'reviewer' went idle",
@@ -666,7 +668,7 @@ class TestHandleTaskCompleted:
             snapshot = claude_task_state.get_snapshot("@0")
             assert snapshot is not None
             assert snapshot.done_count == 1
-            mock_enqueue.assert_awaited_once_with(bot, 100, "@0", None, thread_id=42)
+            mock_enqueue.assert_awaited_once_with(ANY, 100, "@0", None, thread_id=42)
 
 
 class TestHandleStopFailure:
@@ -682,7 +684,7 @@ class TestHandleStopFailure:
                 return_value=-100,
             ),
             patch(
-                "ccgram.handlers.message_sender.rate_limit_send_message"
+                "ccgram.handlers.messaging_pipeline.message_sender.rate_limit_send_message"
             ) as mock_send,
         ):
             event = _make_event(
@@ -701,7 +703,7 @@ class TestHandleStopFailure:
         )
         bot = AsyncMock(spec=Bot)
         with patch(
-            "ccgram.handlers.message_sender.rate_limit_send_message"
+            "ccgram.handlers.messaging_pipeline.message_sender.rate_limit_send_message"
         ) as mock_send:
             event = _make_event(event_type="StopFailure", data={"error": "unknown"})
             await dispatch_hook_event(event, bot)
@@ -733,15 +735,15 @@ class TestHandleSessionEnd:
             patch("ccgram.handlers.hook_events.update_topic_emoji") as mock_emoji,
             patch("ccgram.handlers.hook_events.enqueue_status_update") as mock_enqueue,
             patch(
-                "ccgram.handlers.polling_strategies.terminal_poll_state.clear_seen_status"
+                "ccgram.handlers.polling.polling_state.terminal_poll_state.clear_seen_status"
             ) as mock_clear,
         ):
             event = _make_event(event_type="SessionEnd", data={"reason": "clear"})
             await dispatch_hook_event(event, bot)
 
             mock_clear.assert_called_once_with("@0")
-            mock_emoji.assert_called_once_with(bot, -100, 42, "done", "project")
-            mock_enqueue.assert_called_once_with(bot, 100, "@0", None, thread_id=42)
+            mock_emoji.assert_called_once_with(ANY, -100, 42, "done", "project")
+            mock_enqueue.assert_called_once_with(ANY, 100, "@0", None, thread_id=42)
             mock_clear_session.assert_called_once_with("@0")
 
     async def test_clears_claude_task_state(self, monkeypatch) -> None:
@@ -789,7 +791,7 @@ class TestHandleSessionEnd:
             patch("ccgram.handlers.hook_events.update_topic_emoji"),
             patch("ccgram.handlers.hook_events.enqueue_status_update"),
             patch(
-                "ccgram.handlers.polling_strategies.terminal_poll_state.clear_seen_status"
+                "ccgram.handlers.polling.polling_state.terminal_poll_state.clear_seen_status"
             ),
         ):
             event = _make_event(event_type="SessionEnd", data={"reason": "clear"})
@@ -819,7 +821,7 @@ class TestHandleSessionEnd:
             patch("ccgram.handlers.hook_events.update_topic_emoji"),
             patch("ccgram.handlers.hook_events.enqueue_status_update"),
             patch(
-                "ccgram.handlers.polling_strategies.terminal_poll_state.clear_seen_status"
+                "ccgram.handlers.polling.polling_state.terminal_poll_state.clear_seen_status"
             ),
         ):
             event = _make_event(event_type="SessionEnd", data={"reason": "clear"})
@@ -836,3 +838,37 @@ class TestHandleSessionEnd:
             event = _make_event(event_type="SessionEnd", data={"reason": "logout"})
             await dispatch_hook_event(event, bot)
             mock_enqueue.assert_not_called()
+
+
+class TestRegisterStopCallback:
+    def test_double_registration_raises(self) -> None:
+        from ccgram.handlers import hook_events
+
+        hook_events._reset_stop_callback_for_testing()
+        hook_events.register_stop_callback(AsyncMock())
+        with pytest.raises(RuntimeError, match="already registered"):
+            hook_events.register_stop_callback(AsyncMock())
+
+    async def test_default_raises_when_not_wired(self) -> None:
+        from ccgram.handlers import hook_events
+
+        hook_events._reset_stop_callback_for_testing()
+        with pytest.raises(RuntimeError, match="not wired"):
+            await hook_events._stop_callback(AsyncMock(spec=Bot), "ccgram:@0")
+
+    async def test_dispatch_stop_raises_when_not_wired(self, monkeypatch) -> None:
+        from ccgram.handlers import hook_events
+
+        hook_events._reset_stop_callback_for_testing()
+        monkeypatch.setattr(
+            "ccgram.handlers.hook_events.thread_router.iter_thread_bindings",
+            lambda: iter([(100, 42, "@0")]),
+        )
+        bot = AsyncMock(spec=Bot)
+        with (
+            patch("ccgram.handlers.hook_events.update_topic_emoji"),
+            patch("ccgram.handlers.hook_events.enqueue_status_update"),
+        ):
+            event = _make_event(event_type="Stop", data={"stop_reason": "done"})
+            with pytest.raises(RuntimeError, match="not wired"):
+                await dispatch_hook_event(event, bot)

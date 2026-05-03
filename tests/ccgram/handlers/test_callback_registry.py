@@ -251,15 +251,15 @@ class TestLoadHandlers:
     def test_load_handlers_imports_modules(self) -> None:
         load_handlers()
         expected_modules = [
-            "ccgram.handlers.directory_callbacks",
-            "ccgram.handlers.window_callbacks",
-            "ccgram.handlers.history_callbacks",
-            "ccgram.handlers.screenshot_callbacks",
-            "ccgram.handlers.interactive_callbacks",
-            "ccgram.handlers.recovery_callbacks",
-            "ccgram.handlers.resume_command",
-            "ccgram.handlers.voice_callbacks",
-            "ccgram.handlers.shell_commands",
+            "ccgram.handlers.topics.directory_callbacks",
+            "ccgram.handlers.topics.window_callbacks",
+            "ccgram.handlers.recovery.history_callbacks",
+            "ccgram.handlers.live.screenshot_callbacks",
+            "ccgram.handlers.interactive.interactive_callbacks",
+            "ccgram.handlers.recovery.recovery_callbacks",
+            "ccgram.handlers.recovery.resume_command",
+            "ccgram.handlers.voice.voice_callbacks",
+            "ccgram.handlers.shell.shell_commands",
             "ccgram.handlers.sessions_dashboard",
             "ccgram.handlers.sync_command",
         ]

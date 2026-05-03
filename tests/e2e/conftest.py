@@ -17,6 +17,29 @@ from ._helpers import TEST_CHAT_ID, _bump_message_id
 
 pytestmark = pytest.mark.e2e
 
+
+@pytest.fixture(autouse=True)
+def _reset_runtime_callbacks():
+    """Reset register-once callbacks AND bootstrap wire flag between tests.
+
+    Each e2e test runs ``app.post_init(app)`` which calls
+    ``wire_runtime_callbacks`` → ``register_stop_callback`` /
+    ``register_rc_active_provider`` / ``register_approval_callback``.
+    F2.6 made those fail loud on double registration AND
+    ``wire_runtime_callbacks`` is idempotent (short-circuits on
+    ``_callbacks_wired``), so without resetting both layers, test N+1
+    either re-registers and raises (without idempotency) or skips wiring
+    entirely and leaves the inner callbacks unwired (with idempotency).
+    Delegating to ``bootstrap.reset_for_testing`` keeps both layers in
+    sync with the production reset path.
+    """
+    from ccgram import bootstrap
+
+    bootstrap.reset_for_testing()
+    yield
+    bootstrap.reset_for_testing()
+
+
 # ---------------------------------------------------------------------------
 # State directory fixture
 # ---------------------------------------------------------------------------
@@ -65,6 +88,10 @@ def e2e_tmux(monkeypatch):
     from ccgram.tmux_manager import TmuxManager
 
     monkeypatch.setattr(config, "tmux_session_name", E2E_TMUX_SESSION)
+    # Suppress external-session discovery so the dev's own tmux sessions
+    # don't bleed into the test's window picker. The pattern matches
+    # nothing, which short-circuits ``discover_external_sessions``.
+    monkeypatch.setattr(config, "tmux_external_patterns", "__no_external_in_e2e__")
 
     server = libtmux.Server()
 
@@ -89,22 +116,22 @@ def e2e_tmux(monkeypatch):
         "ccgram.bot",
         "ccgram.session",
         "ccgram.session_monitor",
-        "ccgram.handlers.text_handler",
-        "ccgram.handlers.directory_callbacks",
-        "ccgram.handlers.polling_coordinator",
-        "ccgram.handlers.recovery_callbacks",
+        "ccgram.handlers.text.text_handler",
+        "ccgram.handlers.topics.directory_callbacks",
+        "ccgram.handlers.polling.polling_coordinator",
+        "ccgram.handlers.recovery.recovery_callbacks",
         "ccgram.handlers.sessions_dashboard",
-        "ccgram.handlers.screenshot_callbacks",
-        "ccgram.handlers.interactive_ui",
-        "ccgram.handlers.interactive_callbacks",
-        "ccgram.handlers.window_callbacks",
-        "ccgram.handlers.restore_command",
-        "ccgram.handlers.resume_command",
-        "ccgram.handlers.history_callbacks",
+        "ccgram.handlers.live.screenshot_callbacks",
+        "ccgram.handlers.interactive.interactive_ui",
+        "ccgram.handlers.interactive.interactive_callbacks",
+        "ccgram.handlers.topics.window_callbacks",
+        "ccgram.handlers.recovery.restore_command",
+        "ccgram.handlers.recovery.resume_command",
+        "ccgram.handlers.recovery.history_callbacks",
         "ccgram.handlers.sync_command",
-        "ccgram.handlers.command_orchestration",
-        "ccgram.handlers.topic_orchestration",
-        "ccgram.handlers.shell_commands",
+        "ccgram.handlers.commands.forward",
+        "ccgram.handlers.topics.topic_orchestration",
+        "ccgram.handlers.shell.shell_commands",
         "ccgram.handlers.cleanup",
     ]
     import importlib
@@ -228,25 +255,25 @@ async def e2e_app(e2e_state_dir, e2e_tmux, intercepted_calls, monkeypatch):
     _sm_modules = [
         "ccgram.session",
         "ccgram.bot",
-        "ccgram.handlers.text_handler",
-        "ccgram.handlers.directory_callbacks",
-        "ccgram.handlers.directory_browser",
-        "ccgram.handlers.polling_coordinator",
-        "ccgram.handlers.message_queue",
-        "ccgram.handlers.recovery_callbacks",
+        "ccgram.handlers.text.text_handler",
+        "ccgram.handlers.topics.directory_callbacks",
+        "ccgram.handlers.topics.directory_browser",
+        "ccgram.handlers.polling.polling_coordinator",
+        "ccgram.handlers.messaging_pipeline.message_queue",
+        "ccgram.handlers.recovery.recovery_callbacks",
         "ccgram.handlers.sessions_dashboard",
-        "ccgram.handlers.screenshot_callbacks",
-        "ccgram.handlers.history",
+        "ccgram.handlers.live.screenshot_callbacks",
+        "ccgram.handlers.recovery.history",
         "ccgram.handlers.hook_events",
         "ccgram.handlers.file_handler",
-        "ccgram.handlers.voice_callbacks",
-        "ccgram.handlers.window_callbacks",
-        "ccgram.handlers.restore_command",
-        "ccgram.handlers.resume_command",
+        "ccgram.handlers.voice.voice_callbacks",
+        "ccgram.handlers.topics.window_callbacks",
+        "ccgram.handlers.recovery.restore_command",
+        "ccgram.handlers.recovery.resume_command",
         "ccgram.handlers.sync_command",
-        "ccgram.handlers.command_orchestration",
-        "ccgram.handlers.topic_orchestration",
-        "ccgram.handlers.shell_commands",
+        "ccgram.handlers.commands.forward",
+        "ccgram.handlers.topics.topic_orchestration",
+        "ccgram.handlers.shell.shell_commands",
     ]
     import importlib
 

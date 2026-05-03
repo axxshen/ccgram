@@ -489,6 +489,10 @@ def _write_event(
     data: dict[str, Any],
 ) -> None:
     """Append one JSONL event line to events.jsonl with file locking."""
+    # Lazy: hook.py runs as `python -m ccgram.hook` from Claude Code on
+    # every notification; deferring utils import until an event actually
+    # fires keeps the latency-sensitive fast path lean.
+    # Lazy: utils.ccgram_dir resolves $CCGRAM_DIR at runtime
     from .utils import ccgram_dir
 
     events_file = ccgram_dir() / "events.jsonl"
@@ -597,6 +601,7 @@ def _update_session_map(
     tmux_session_name: str,
 ) -> None:
     """Update session_map.json for a SessionStart event."""
+    # Lazy: same hook fast-path rationale as ``_write_event``.
     from .utils import ccgram_dir, atomic_write_json
 
     map_file = ccgram_dir() / "session_map.json"
@@ -624,6 +629,8 @@ def _update_session_map(
                         # instead of silently overwriting with near-empty data.
                         backup = map_file.with_suffix(".json.corrupt")
                         try:
+                            # Lazy: shutil only needed in the error path of
+                            # backing up a corrupted session_map.json.
                             import shutil
 
                             shutil.copy2(map_file, backup)

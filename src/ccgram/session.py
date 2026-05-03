@@ -23,11 +23,20 @@ from pathlib import Path
 from typing import Any
 
 from .config import config
-from .session_map import session_map_sync
+from .mailbox import Mailbox
+from .session_map import (
+    SessionMapSync,
+    install_session_map_sync,
+    session_map_sync,
+)
 from .state_persistence import StatePersistence
 from .tmux_manager import tmux_manager
-from .thread_router import thread_router
-from .user_preferences import user_preferences
+from .thread_router import ThreadRouter, install_thread_router, thread_router
+from .user_preferences import (
+    UserPreferences,
+    install_user_preferences,
+    user_preferences,
+)
 from .window_resolver import EMDASH_SESSION_PREFIX, is_foreign_window, is_window_id
 from .window_view import WindowView
 from .window_state_store import (
@@ -37,6 +46,8 @@ from .window_state_store import (
     DEFAULT_BATCH_MODE,
     NOTIFICATION_MODES,
     WindowState,
+    WindowStateStore,
+    install_window_store,
     window_store,
 )
 
@@ -98,8 +109,6 @@ def _migrate_mailbox_ids(
             remap[f"{tmux_session}:{old_id}"] = f"{tmux_session}:{new_id}"
 
     if remap:
-        from .mailbox import Mailbox
-
         Mailbox(config.mailbox_dir).migrate_ids(remap)
 
 
@@ -141,23 +150,21 @@ class SessionManager:
 
     def __post_init__(self) -> None:
         self._persistence = StatePersistence(config.state_file, self._serialize_state)
-        self._wire_singletons()
+        self._window_store = WindowStateStore(
+            schedule_save=self._save_state,
+            on_hookless_provider_switch=self._clear_session_map_entry,
+        )
+        install_window_store(self._window_store)
+        self._thread_router = ThreadRouter(
+            schedule_save=self._save_state,
+            has_window_state=self._window_store.has_window,
+        )
+        install_thread_router(self._thread_router)
+        self._user_preferences = UserPreferences(schedule_save=self._save_state)
+        install_user_preferences(self._user_preferences)
+        self._session_map_sync = SessionMapSync(schedule_save=self._save_state)
+        install_session_map_sync(self._session_map_sync)
         self._load_state()
-
-    def _wire_singletons(self) -> None:
-        """Wire all module-level state singletons to this manager.
-
-        Centralized so adding a new singleton in the future is a one-line
-        change in one place. Singletons start with a fail-loud
-        ``unwired_save`` default that raises ``RuntimeError`` if mutated
-        before this method runs.
-        """
-        window_store._schedule_save = self._save_state
-        window_store._on_hookless_provider_switch = self._clear_session_map_entry
-        thread_router._schedule_save = self._save_state
-        thread_router._has_window_state = lambda wid: wid in window_store.window_states
-        user_preferences._schedule_save = self._save_state
-        session_map_sync._schedule_save = self._save_state
 
     def _serialize_state(self) -> dict[str, Any]:
         """Serialize all state to a dict for persistence."""
@@ -225,6 +232,9 @@ class SessionManager:
         Dead window bindings and states are preserved for /restore recovery.
         Also migrates mailbox directories when window IDs change.
         """
+        # Lazy: window_resolver imports session-state types; hoisting forms
+        # session → window_resolver → session.WindowState cycle.
+        # Lazy: window_resolver pulls back into session manager
         from .window_resolver import LiveWindow, resolve_stale_ids as _resolve
 
         windows = await tmux_manager.list_windows()
@@ -340,7 +350,6 @@ class SessionManager:
                 qualified_live.add(wid)
             else:
                 qualified_live.add(f"{config.tmux_session_name}:{wid}")
-        from .mailbox import Mailbox
 
         Mailbox(config.mailbox_dir).prune_dead(qualified_live)
 
@@ -590,6 +599,8 @@ class SessionManager:
         """
         supports_hook = True
         if provider_name:
+            # Lazy: providers.registry imports concrete provider modules
+            # which transitively touch session state; keep lookup local.
             from .providers.registry import UnknownProviderError, registry
 
             try:

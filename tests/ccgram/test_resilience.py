@@ -135,7 +135,7 @@ class TestSessionMapCorruptionGuard:
 
 class TestDeadWorkerRespawn:
     async def test_dead_worker_is_respawned(self):
-        from ccgram.handlers.message_queue import (
+        from ccgram.handlers.messaging_pipeline.message_queue import (
             _message_queues,
             _queue_locks,
             _queue_workers,
@@ -176,7 +176,7 @@ class TestRateLimitSendLocking:
     async def test_concurrent_sends_serialized(self):
         import time
 
-        from ccgram.handlers.message_sender import (
+        from ccgram.handlers.messaging_pipeline.message_sender import (
             MESSAGE_SEND_INTERVAL,
             _last_send_time,
             _rate_limit_locks,
@@ -225,7 +225,7 @@ class TestCallbackErrorWidened:
 
 class TestProbeFailureClearing:
     def test_clear_probe_failures_resets_counter(self):
-        from ccgram.handlers.polling_strategies import (
+        from ccgram.handlers.polling.polling_state import (
             lifecycle_strategy,
             terminal_poll_state,
         )
@@ -245,7 +245,7 @@ class TestProbeFailureClearing:
 
 class TestPollStateCleanup:
     def test_clear_window_poll_state_removes_entry(self):
-        from ccgram.handlers.polling_strategies import terminal_poll_state
+        from ccgram.handlers.polling.polling_state import terminal_poll_state
 
         _window_poll_state = terminal_poll_state._states
         terminal_poll_state.get_state("@cleanup-test")
@@ -257,13 +257,13 @@ class TestPollStateCleanup:
 
 class TestGlobalExceptionHandler:
     def test_handler_logs_exception(self):
-        from ccgram.bot import _global_exception_handler
+        from ccgram.bootstrap import _global_exception_handler
 
         loop = MagicMock()
         error = ValueError("test error")
         context = {"exception": error, "message": "test context"}
 
-        with patch("ccgram.bot.logger") as mock_logger:
+        with patch("ccgram.bootstrap.logger") as mock_logger:
             _global_exception_handler(loop, context)
 
         mock_logger.error.assert_called_once()
@@ -295,10 +295,10 @@ class TestShutdownNotificationLifecycle:
             patch(
                 "ccgram.bot._send_shutdown_notification", new_callable=AsyncMock
             ) as mock_send,
-            patch("ccgram.bot._status_poll_task", None),
-            patch("ccgram.bot.session_monitor", None),
-            patch("ccgram.bot.session_manager"),
-            patch("ccgram.bot.shutdown_workers", new_callable=AsyncMock),
+            patch("ccgram.bootstrap._status_poll_task", None),
+            patch("ccgram.bootstrap.session_monitor", None),
+            patch("ccgram.bootstrap.session_manager"),
+            patch("ccgram.bootstrap.shutdown_workers", new_callable=AsyncMock),
         ):
             await post_shutdown(application)
 

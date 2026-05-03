@@ -4,6 +4,13 @@ The ``main()`` function invokes the Click command group defined in cli.py,
 which dispatches to subcommands (run, hook, status, doctor).
 ``run_bot()`` contains the actual bot startup logic, called by the ``run``
 command after CLI flags have been applied to the environment.
+
+Module-level imports stay minimal on purpose: ``run_bot``,
+``start_miniapp_if_enabled``, and ``stop_miniapp_if_enabled`` lazy-load
+``config``, ``utils``, ``tmux_manager``, ``bot.create_bot``, and
+``miniapp`` so that ``ccgram doctor`` / ``status`` / ``hook`` (which
+import ``main`` only for ``_shutdown_signal`` and ``__version__``) do
+not pay PTB or aiohttp startup cost.
 """
 
 import logging
@@ -123,6 +130,8 @@ def run_bot() -> None:
     auto_detected = False
 
     if not explicit_session and os.environ.get("TMUX"):
+        # Lazy: utils import deferred to avoid loading config-aware helpers
+        # before TMUX_SESSION_NAME is set; check_duplicate_ccgram pings tmux.
         from .utils import check_duplicate_ccgram, detect_tmux_context
 
         detected, own_wid = detect_tmux_context()
@@ -138,8 +147,12 @@ def run_bot() -> None:
         own_wid = None
 
     try:
+        # Lazy: config validates env at import time; deferring lets us catch
+        # ValueError and emit a friendly error before the click subcommand layer.
         from .config import config
     except ValueError as e:
+        # Lazy: ccgram_dir resolves the config dir without instantiating
+        # `config` (which already failed); needed to print the .env path hint.
         from .utils import ccgram_dir
 
         config_dir = ccgram_dir()
@@ -158,6 +171,7 @@ def run_bot() -> None:
 
     logger = structlog.get_logger()
 
+    # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from .tmux_manager import tmux_manager
 
     logger.info("Allowed users: %s", config.allowed_users)
@@ -175,10 +189,12 @@ def run_bot() -> None:
 
     logger.info("Tmux session '%s' ready", session.session_name)
 
+    # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from . import __version__
 
     dev = "+dev" if "+unknown" in __version__ or ".dev" in __version__ else ""
     logger.info("Starting ccgram %s%s", __version__, dev)
+    # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from .bot import create_bot
 
     application = create_bot()
@@ -207,6 +223,7 @@ async def start_miniapp_if_enabled() -> None:
     if _miniapp_runner is not None:
         return
 
+    # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from .config import config
 
     if not config.miniapp_base_url:
@@ -214,6 +231,8 @@ async def start_miniapp_if_enabled() -> None:
 
     logger = structlog.get_logger()
     try:
+        # Lazy: miniapp depends on aiohttp; loading at module level would
+        # break deployments that disable the dashboard via miniapp_base_url=None.
         from .miniapp import start_server
 
         _miniapp_runner = await start_server(
@@ -241,6 +260,7 @@ async def stop_miniapp_if_enabled() -> None:
 
     logger = structlog.get_logger()
     try:
+        # Lazy: miniapp depends on aiohttp; symmetric with start_miniapp_if_enabled.
         from .miniapp import stop_server
 
         await stop_server(_miniapp_runner)
@@ -252,6 +272,7 @@ async def stop_miniapp_if_enabled() -> None:
 
 def main() -> None:
     """Main entry point — dispatches via Click CLI group."""
+    # Lazy: main runs `ccgram` startup; defer imports until the relevant subcommand executes
     from .cli import cli
 
     cli()

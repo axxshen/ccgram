@@ -12,21 +12,22 @@ Key functions:
   - handle_sessions_kill_confirm(): second tap — kill and unbind
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 import structlog
 
 from telegram import (
-    Bot,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
 )
-from telegram.ext import ContextTypes
-
 from ..config import config
-from ..window_query import view_window
+from ..telegram_client import PTBTelegramClient, TelegramClient
 from ..thread_router import thread_router
 from ..tmux_manager import tmux_manager
+from ..window_query import view_window
 from .callback_data import (
     CB_SESSIONS_KILL,
     CB_SESSIONS_KILL_CONFIRM,
@@ -38,7 +39,10 @@ from .callback_data import (
 from .callback_helpers import user_owns_window
 from .callback_registry import register
 from .cleanup import clear_topic_state
-from .message_sender import safe_edit, safe_reply
+from .messaging_pipeline.message_sender import safe_edit, safe_reply
+
+if TYPE_CHECKING:
+    from telegram.ext import ContextTypes
 
 logger = structlog.get_logger()
 
@@ -155,7 +159,7 @@ async def handle_sessions_kill(
 
 
 async def handle_sessions_kill_confirm(
-    query: CallbackQuery, user_id: int, window_id: str, bot: Bot
+    query: CallbackQuery, user_id: int, window_id: str, client: TelegramClient
 ) -> None:
     """Second tap — kill the tmux window, unbind all users, refresh dashboard."""
     display = thread_router.get_display_name(window_id)
@@ -168,7 +172,7 @@ async def handle_sessions_kill_confirm(
     # which unbind_thread deletes
     for uid, tid, bound_wid in list(thread_router.iter_thread_bindings()):
         if bound_wid == window_id:
-            await clear_topic_state(uid, tid, bot, window_id=window_id)
+            await clear_topic_state(uid, tid, client, window_id=window_id)
             thread_router.unbind_thread(uid, tid)
 
     logger.info(
@@ -211,7 +215,9 @@ async def _dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not user_owns_window(user.id, window_id):
             await query.answer("Not your session", show_alert=True)
             return
-        await handle_sessions_kill_confirm(query, user.id, window_id, context.bot)
+        await handle_sessions_kill_confirm(
+            query, user.id, window_id, PTBTelegramClient(context.bot)
+        )
         await query.answer("Killed")
     elif data.startswith(CB_SESSIONS_KILL):
         window_id = data[len(CB_SESSIONS_KILL) :]

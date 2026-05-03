@@ -105,7 +105,7 @@ max-statements = 60
 # CC commands: filesystem scan with validation branches
 "src/ccgram/cc_commands.py" = ["C901", "PLR0912"]
 # History: paginated message formatting with many edge cases
-"src/ccgram/handlers/history.py" = ["C901", "PLR0912", "PLR0915"]
+"src/ccgram/handlers/recovery/history.py" = ["C901", "PLR0912", "PLR0915"]
 # Response builder: message formatting with content-type dispatch
 "src/ccgram/handlers/response_builder.py" = ["C901", "PLR0912"]
 # Polling coordinator: background loop with multiple state checks
@@ -113,7 +113,7 @@ max-statements = 60
 # Message queue: worker loop with task dispatch and error handling
 "src/ccgram/handlers/message_queue.py" = ["C901"]
 # Directory callbacks: confirm handler with state cleanup branches
-"src/ccgram/handlers/directory_callbacks.py" = ["C901"]
+"src/ccgram/handlers/topics/directory_callbacks.py" = ["C901"]
 # Recovery callbacks: fresh handler with state cleanup branches
 "src/ccgram/handlers/recovery_callbacks.py" = ["C901"]
 

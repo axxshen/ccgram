@@ -217,12 +217,13 @@ class TestSyncCommand:
             ) as mock_sync_topic_name,
         ):
             await sync_command(update, MagicMock())
-            mock_sync_topic_name.assert_called_once_with(
-                bot,
-                -999,
-                42,
-                "ccgram-codex",
-            )
+            mock_sync_topic_name.assert_called_once()
+            args = mock_sync_topic_name.call_args.args
+            assert args[1:] == (-999, 42, "ccgram-codex")
+            from ccgram.telegram_client import PTBTelegramClient
+
+            assert isinstance(args[0], PTBTelegramClient)
+            assert args[0].bot is bot
 
 
 class TestSyncFix:
@@ -305,8 +306,14 @@ class TestSyncFix:
             patch("ccgram.handlers.sync_command.clear_topic_state") as mock_cleanup,
         ):
             await handle_sync_fix(query)
-            mock_bot.delete_forum_topic.assert_called_once_with(-999, 42)
-            mock_cleanup.assert_called_once_with(100, 42, bot=mock_bot, window_id="@7")
+            mock_bot.delete_forum_topic.assert_called_once_with(
+                chat_id=-999, message_thread_id=42
+            )
+            mock_cleanup.assert_called_once()
+            cleanup_args = mock_cleanup.call_args
+            assert cleanup_args.args[:2] == (100, 42)
+            assert cleanup_args.kwargs["window_id"] == "@7"
+            assert cleanup_args.kwargs["client"].bot is mock_bot
             mock_tr.unbind_thread.assert_called_once_with(100, 42)
             report_text = mock_edit.call_args[0][1]
             assert "Removed 1 stale topic" in report_text
@@ -385,7 +392,11 @@ class TestSyncFix:
         ):
             await handle_sync_fix(query)
             mock_bot.close_forum_topic.assert_not_called()
-            mock_cleanup.assert_called_once_with(100, 42, bot=mock_bot, window_id="@7")
+            mock_cleanup.assert_called_once()
+            cleanup_args = mock_cleanup.call_args
+            assert cleanup_args.args[:2] == (100, 42)
+            assert cleanup_args.kwargs["window_id"] == "@7"
+            assert cleanup_args.kwargs["client"].bot is mock_bot
             mock_tr.unbind_thread.assert_called_once_with(100, 42)
 
     async def test_fix_adopts_orphaned_windows(self, _patch_deps) -> None:
@@ -409,7 +420,7 @@ class TestSyncFix:
         with (
             patch("ccgram.handlers.sync_command.safe_edit"),
             patch(
-                "ccgram.handlers.topic_orchestration.handle_new_window",
+                "ccgram.handlers.topics.topic_orchestration.handle_new_window",
                 new_callable=AsyncMock,
             ) as mock_handle,
         ):
@@ -504,7 +515,7 @@ class TestDeadTopicRecreation:
         bot = AsyncMock()
 
         with patch(
-            "ccgram.handlers.topic_orchestration.handle_new_window",
+            "ccgram.handlers.topics.topic_orchestration.handle_new_window",
             new_callable=AsyncMock,
         ) as mock_handle:
             recreated = await _recreate_dead_topics(bot, issues)
@@ -534,7 +545,7 @@ class TestDeadTopicRecreation:
         mock_bot = AsyncMock()
 
         with patch(
-            "ccgram.handlers.topic_orchestration.handle_new_window",
+            "ccgram.handlers.topics.topic_orchestration.handle_new_window",
             new_callable=AsyncMock,
         ) as mock_handle:
             count = await _recreate_dead_topics(mock_bot, issues)
@@ -552,7 +563,7 @@ class TestDeadTopicRecreation:
         mock_bot = AsyncMock()
 
         with patch(
-            "ccgram.handlers.topic_orchestration.handle_new_window",
+            "ccgram.handlers.topics.topic_orchestration.handle_new_window",
             new_callable=AsyncMock,
         ) as mock_handle:
             count = await _recreate_dead_topics(mock_bot, issues)
@@ -577,7 +588,7 @@ class TestDeadTopicRecreation:
         mock_bot = AsyncMock()
 
         with patch(
-            "ccgram.handlers.topic_orchestration.handle_new_window",
+            "ccgram.handlers.topics.topic_orchestration.handle_new_window",
             new_callable=AsyncMock,
             side_effect=TelegramError("Failed"),
         ):
@@ -663,7 +674,7 @@ class TestSyncFixDeadTopic:
         with (
             patch("ccgram.handlers.sync_command.safe_edit") as mock_edit,
             patch(
-                "ccgram.handlers.topic_orchestration.handle_new_window",
+                "ccgram.handlers.topics.topic_orchestration.handle_new_window",
                 new_callable=AsyncMock,
             ) as mock_handle,
         ):

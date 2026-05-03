@@ -9,6 +9,9 @@ Key handlers:
   - handle_document_message: handles filters.Document.ALL
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 import structlog
 import re
 from datetime import datetime, timezone
@@ -17,14 +20,16 @@ from pathlib import Path
 from telegram import Message, Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
-from telegram.ext import ContextTypes
-
 from ..config import config
+from ..telegram_client import PTBTelegramClient
 from ..window_query import view_window
 from ..tmux_manager import send_to_window
 from ..thread_router import thread_router
 from .callback_helpers import get_thread_id
-from .message_sender import ack_reaction, safe_reply
+from .messaging_pipeline.message_sender import ack_reaction, safe_reply
+
+if TYPE_CHECKING:
+    from telegram.ext import ContextTypes
 
 logger = structlog.get_logger()
 
@@ -215,7 +220,9 @@ async def _upload_and_notify(
 
     success, err = await send_to_window(window_id, claude_msg)
     if success:
-        await ack_reaction(message.get_bot(), message.chat.id, message.message_id)
+        await ack_reaction(
+            PTBTelegramClient(message.get_bot()), message.chat.id, message.message_id
+        )
         await safe_reply(message, f"{success_emoji} Uploaded `{rel_path}`")
     else:
         await safe_reply(

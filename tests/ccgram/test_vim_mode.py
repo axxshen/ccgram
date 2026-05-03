@@ -362,7 +362,7 @@ class TestPollingAndCleanupIntegration:
             patch("ccgram.thread_router.thread_router") as mock_tr,
         ):
             mock_tr.resolve_chat_id.return_value = -100
-            await clear_topic_state(1, 42, bot=AsyncMock(), window_id="@7")
+            await clear_topic_state(1, 42, client=AsyncMock(), window_id="@7")
         assert "@7" not in _vim_state
 
     async def test_cleanup_skips_vim_state_without_window_id(self):
@@ -376,7 +376,7 @@ class TestPollingAndCleanupIntegration:
             patch("ccgram.thread_router.thread_router") as mock_tr,
         ):
             mock_tr.resolve_chat_id.return_value = -100
-            await clear_topic_state(1, 42, bot=AsyncMock(), window_id=None)
+            await clear_topic_state(1, 42, client=AsyncMock(), window_id=None)
         # Vim state for @7 should remain untouched
         assert _vim_state["@7"] is True
 
@@ -384,29 +384,31 @@ class TestPollingAndCleanupIntegration:
         """Polling calls notify_vim_insert_seen when INSERT is in last 3 lines."""
         with (
             patch(
-                "ccgram.handlers.window_tick.tmux_manager.find_window_by_id",
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.find_window_by_id",
                 new_callable=AsyncMock,
             ) as mock_find,
             patch(
-                "ccgram.handlers.window_tick.tmux_manager.capture_pane",
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="output\nprompt\n-- INSERT --",
             ),
             patch(
-                "ccgram.tmux_manager.notify_vim_insert_seen",
+                "ccgram.handlers.polling.window_tick.observe.notify_vim_insert_seen",
                 wraps=notify_vim_insert_seen,
             ) as mock_notify,
             patch(
-                "ccgram.handlers.window_tick._parse_with_pyte",
-                return_value=None,
-            ),
-            patch("ccgram.handlers.window_tick.get_provider_for_window") as mock_gpw,
-            patch(
-                "ccgram.handlers.window_tick.get_interactive_window",
+                "ccgram.handlers.polling.window_tick.observe._parse_with_pyte",
                 return_value=None,
             ),
             patch(
-                "ccgram.handlers.window_tick._apply_tick_decision",
+                "ccgram.handlers.polling.window_tick.apply.get_provider_for_window"
+            ) as mock_gpw,
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.get_interactive_window",
+                return_value=None,
+            ),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply._apply_tick_decision",
                 new_callable=AsyncMock,
             ),
         ):
@@ -421,7 +423,7 @@ class TestPollingAndCleanupIntegration:
             mock_provider.capabilities.uses_pane_title = False
             mock_gpw.return_value = mock_provider
 
-            from ccgram.handlers.window_tick import (
+            from ccgram.handlers.polling.window_tick import (
                 _update_status as update_status_message,
             )
 
@@ -432,29 +434,31 @@ class TestPollingAndCleanupIntegration:
         """Polling does NOT call notify when INSERT is only in historical output."""
         with (
             patch(
-                "ccgram.handlers.window_tick.tmux_manager.find_window_by_id",
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.find_window_by_id",
                 new_callable=AsyncMock,
             ) as mock_find,
             patch(
-                "ccgram.handlers.window_tick.tmux_manager.capture_pane",
+                "ccgram.handlers.polling.window_tick.apply.tmux_manager.capture_pane",
                 new_callable=AsyncMock,
                 return_value="-- INSERT --\nline2\nline3\nline4",
             ),
             patch(
-                "ccgram.tmux_manager.notify_vim_insert_seen",
+                "ccgram.handlers.polling.window_tick.observe.notify_vim_insert_seen",
                 wraps=notify_vim_insert_seen,
             ) as mock_notify,
             patch(
-                "ccgram.handlers.window_tick._parse_with_pyte",
-                return_value=None,
-            ),
-            patch("ccgram.handlers.window_tick.get_provider_for_window") as mock_gpw,
-            patch(
-                "ccgram.handlers.window_tick.get_interactive_window",
+                "ccgram.handlers.polling.window_tick.observe._parse_with_pyte",
                 return_value=None,
             ),
             patch(
-                "ccgram.handlers.window_tick._apply_tick_decision",
+                "ccgram.handlers.polling.window_tick.apply.get_provider_for_window"
+            ) as mock_gpw,
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.get_interactive_window",
+                return_value=None,
+            ),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply._apply_tick_decision",
                 new_callable=AsyncMock,
             ),
         ):
@@ -469,7 +473,7 @@ class TestPollingAndCleanupIntegration:
             mock_provider.capabilities.uses_pane_title = False
             mock_gpw.return_value = mock_provider
 
-            from ccgram.handlers.window_tick import (
+            from ccgram.handlers.polling.window_tick import (
                 _update_status as update_status_message,
             )
 

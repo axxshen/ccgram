@@ -9,35 +9,61 @@ Key function: dispatch_hook_event().
 """
 
 import asyncio
-import structlog
 from collections.abc import Awaitable, Callable
 
-from telegram import Bot
+import structlog
 
 from ..claude_task_state import classify_wait_message, claude_task_state
 from ..providers.base import HookEvent
-from ..window_query import view_window
 from ..session_lifecycle import session_lifecycle
+from ..telegram_client import TelegramClient
 from ..thread_router import thread_router
-from .interactive_ui import (
+from ..window_query import view_window
+from .interactive import (
     clear_interactive_mode,
     get_interactive_window,
     handle_interactive_ui,
     set_interactive_mode,
 )
-from .message_queue import enqueue_status_update
-from .polling_strategies import reset_window_polling_state
-from .topic_emoji import update_topic_emoji
+from .messaging_pipeline.message_queue import enqueue_status_update
+from .polling.polling_state import reset_window_polling_state
+from .status.topic_emoji import update_topic_emoji
+
+
+async def _stop_callback_unwired(_client: TelegramClient, _window_key: str) -> None:
+    raise RuntimeError(
+        "register_stop_callback not wired — call register_stop_callback() at startup"
+    )
+
 
 # Wired at startup by bot.py to trigger broker delivery on Stop events.
 # Avoids a direct hook_events → periodic_tasks import.
-_stop_callback: Callable[[Bot, str], Awaitable[None]] | None = None
+_stop_callback: Callable[[TelegramClient, str], Awaitable[None]] = (
+    _stop_callback_unwired
+)
+_stop_callback_registered: bool = False
 
 
-def register_stop_callback(fn: Callable[[Bot, str], Awaitable[None]]) -> None:
-    """Register the function called when a Stop event fires (wired by bot.py)."""
-    global _stop_callback
+def register_stop_callback(
+    fn: Callable[[TelegramClient, str], Awaitable[None]],
+) -> None:
+    """Register the function called when a Stop event fires (wired by bot.py).
+
+    Raises RuntimeError if called more than once — wiring should happen exactly
+    once at startup; double registration is a programming error.
+    """
+    global _stop_callback, _stop_callback_registered
+    if _stop_callback_registered:
+        raise RuntimeError("register_stop_callback already registered")
     _stop_callback = fn
+    _stop_callback_registered = True
+
+
+def _reset_stop_callback_for_testing() -> None:
+    """Restore the unwired default — only for tests."""
+    global _stop_callback, _stop_callback_registered
+    _stop_callback = _stop_callback_unwired
+    _stop_callback_registered = False
 
 
 logger = structlog.get_logger()
@@ -66,7 +92,7 @@ def _resolve_users_for_window_key(
     return results
 
 
-async def _handle_notification(event: HookEvent, bot: Bot) -> None:
+async def _handle_notification(event: HookEvent, client: TelegramClient) -> None:
     """Handle a Notification event — render interactive UI."""
     users = _resolve_users_for_window_key(event.window_key)
     if not users:
@@ -87,7 +113,7 @@ async def _handle_notification(event: HookEvent, bot: Bot) -> None:
         if wait_header:
             session_lifecycle.handle_notification_wait(window_id, wait_header)
             await enqueue_status_update(
-                bot, user_id, window_id, None, thread_id=thread_id
+                client, user_id, window_id, None, thread_id=thread_id
             )
 
         # Skip if already in interactive mode for this window
@@ -107,7 +133,7 @@ async def _handle_notification(event: HookEvent, bot: Bot) -> None:
 
         await asyncio.sleep(0.3)
 
-        handled = await handle_interactive_ui(bot, user_id, window_id, thread_id)
+        handled = await handle_interactive_ui(client, user_id, window_id, thread_id)
         if not handled:
             clear_interactive_mode(user_id, thread_id)
 
@@ -118,6 +144,8 @@ _LLM_SUMMARY_TIMEOUT = 3.0  # seconds to wait for LLM summary before falling bac
 async def _get_llm_summary(transcript_path: str) -> str | None:
     """Try to get an LLM summary, returning None on failure."""
     try:
+        # Lazy: llm package wires httpx + provider configs; only loaded
+        # when a Stop event actually wants a summary.
         from ..llm.summarizer import summarize_completion
 
         return await summarize_completion(transcript_path)
@@ -126,7 +154,7 @@ async def _get_llm_summary(transcript_path: str) -> str | None:
         return None
 
 
-async def _handle_stop(event: HookEvent, bot: Bot) -> None:
+async def _handle_stop(event: HookEvent, client: TelegramClient) -> None:
     """Handle a Stop event — transition status directly to idle.
 
     Topic emoji remains poller-owned. Hook-driven idle flips can fight the
@@ -175,19 +203,16 @@ async def _handle_stop(event: HookEvent, bot: Bot) -> None:
                 window_id, num_turns=num_turns
             )
             if summary and status_text:
-                status_text = status_text.replace(
-                    "\u2713 Ready", f"\u2713 Done \u2014 {summary}", 1
-                )
+                status_text = status_text.replace("✓ Ready", f"✓ Done — {summary}", 1)
         await enqueue_status_update(
-            bot, user_id, window_id, status_text, thread_id=thread_id
+            client, user_id, window_id, status_text, thread_id=thread_id
         )
 
     # Trigger immediate broker delivery for the idle window via registered callback.
-    if _stop_callback is not None:
-        await _stop_callback(bot, event.window_key)
+    await _stop_callback(client, event.window_key)
 
 
-async def _handle_subagent_start(event: HookEvent, _bot: Bot) -> None:
+async def _handle_subagent_start(event: HookEvent, _client: TelegramClient) -> None:
     """Handle SubagentStart — track active subagent count and name."""
     users = _resolve_users_for_window_key(event.window_key)
     if not users:
@@ -215,7 +240,7 @@ async def _handle_subagent_start(event: HookEvent, _bot: Bot) -> None:
     # subagent count/names to the status bubble via get_subagent_names().
 
 
-async def _handle_subagent_stop(event: HookEvent, _bot: Bot) -> None:
+async def _handle_subagent_stop(event: HookEvent, _client: TelegramClient) -> None:
     """Handle SubagentStop — remove subagent from tracking."""
     users = _resolve_users_for_window_key(event.window_key)
     if not users:
@@ -236,7 +261,7 @@ async def _handle_subagent_stop(event: HookEvent, _bot: Bot) -> None:
     # No immediate status update — polling loop shows updated count within 1s.
 
 
-async def _handle_teammate_idle(event: HookEvent, bot: Bot) -> None:
+async def _handle_teammate_idle(event: HookEvent, client: TelegramClient) -> None:
     """Handle TeammateIdle — notify topic that a teammate went idle."""
 
     users = _resolve_users_for_window_key(event.window_key)
@@ -252,12 +277,17 @@ async def _handle_teammate_idle(event: HookEvent, bot: Bot) -> None:
 
     for user_id, thread_id, window_id in users:
         text = f"\U0001f4a4 Teammate '{teammate_name}' went idle"
-        await enqueue_status_update(bot, user_id, window_id, text, thread_id=thread_id)
+        await enqueue_status_update(
+            client, user_id, window_id, text, thread_id=thread_id
+        )
 
 
-async def _handle_stop_failure(event: HookEvent, bot: Bot) -> None:
+async def _handle_stop_failure(event: HookEvent, client: TelegramClient) -> None:
     """Handle a StopFailure event — alert on API error termination."""
-    from .message_sender import rate_limit_send_message
+    # Lazy: messaging_pipeline.message_sender pulls in safe_reply wiring
+    # which transitively reaches hook_events for completion summaries.
+    # Lazy: messaging_pipeline imports hook_events indirectly via the dispatch chain
+    from .messaging_pipeline.message_sender import rate_limit_send_message
 
     users = _resolve_users_for_window_key(event.window_key)
     if not users:
@@ -273,14 +303,16 @@ async def _handle_stop_failure(event: HookEvent, bot: Bot) -> None:
     )
 
     detail = f": {error_details}" if error_details else ""
-    text = f"\u26a0 API error — {error}{detail}"
+    text = f"⚠ API error — {error}{detail}"
 
     for user_id, thread_id, _window_id in users:
         chat_id = thread_router.resolve_chat_id(user_id, thread_id)
-        await rate_limit_send_message(bot, chat_id, text, message_thread_id=thread_id)
+        await rate_limit_send_message(
+            client, chat_id, text, message_thread_id=thread_id
+        )
 
 
-async def _handle_session_end(event: HookEvent, bot: Bot) -> None:
+async def _handle_session_end(event: HookEvent, client: TelegramClient) -> None:
     """Handle a SessionEnd event — clean up session lifecycle."""
 
     users = _resolve_users_for_window_key(event.window_key)
@@ -302,11 +334,13 @@ async def _handle_session_end(event: HookEvent, bot: Bot) -> None:
         reset_window_polling_state(window_id)
         chat_id = thread_router.resolve_chat_id(user_id, thread_id)
         display = thread_router.get_display_name(window_id)
-        await update_topic_emoji(bot, chat_id, thread_id, "done", display)
-        await enqueue_status_update(bot, user_id, window_id, None, thread_id=thread_id)
+        await update_topic_emoji(client, chat_id, thread_id, "done", display)
+        await enqueue_status_update(
+            client, user_id, window_id, None, thread_id=thread_id
+        )
 
 
-async def _handle_task_completed(event: HookEvent, bot: Bot) -> None:
+async def _handle_task_completed(event: HookEvent, client: TelegramClient) -> None:
     """Handle TaskCompleted — notify topic that a task was completed."""
 
     users = _resolve_users_for_window_key(event.window_key)
@@ -334,35 +368,37 @@ async def _handle_task_completed(event: HookEvent, bot: Bot) -> None:
             )
         if tracked or claude_task_state.has_snapshot(window_id):
             await enqueue_status_update(
-                bot, user_id, window_id, None, thread_id=thread_id
+                client, user_id, window_id, None, thread_id=thread_id
             )
             continue
 
-        text = f"\u2705 Task completed: {task_subject}"
+        text = f"✅ Task completed: {task_subject}"
         if teammate_name:
             text += f" (by '{teammate_name}')"
-        await enqueue_status_update(bot, user_id, window_id, text, thread_id=thread_id)
+        await enqueue_status_update(
+            client, user_id, window_id, text, thread_id=thread_id
+        )
 
 
-async def dispatch_hook_event(event: HookEvent, bot: Bot) -> None:
+async def dispatch_hook_event(event: HookEvent, client: TelegramClient) -> None:
     """Route hook events to appropriate handlers."""
     match event.event_type:
         case "Notification":
-            await _handle_notification(event, bot)
+            await _handle_notification(event, client)
         case "Stop":
-            await _handle_stop(event, bot)
+            await _handle_stop(event, client)
         case "StopFailure":
-            await _handle_stop_failure(event, bot)
+            await _handle_stop_failure(event, client)
         case "SessionEnd":
-            await _handle_session_end(event, bot)
+            await _handle_session_end(event, client)
         case "SubagentStart":
-            await _handle_subagent_start(event, bot)
+            await _handle_subagent_start(event, client)
         case "SubagentStop":
-            await _handle_subagent_stop(event, bot)
+            await _handle_subagent_stop(event, client)
         case "TeammateIdle":
-            await _handle_teammate_idle(event, bot)
+            await _handle_teammate_idle(event, client)
         case "TaskCompleted":
-            await _handle_task_completed(event, bot)
+            await _handle_task_completed(event, client)
         case (
             "SessionStart"
             | "UserPromptSubmit"
