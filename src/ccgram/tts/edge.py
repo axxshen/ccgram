@@ -1,7 +1,8 @@
 """Edge TTS synthesis backend.
 
 Uses the community-maintained edge-tts package (optional dep).
-Import is lazy: the package is only required when CCGRAM_TTS_PROVIDER=edge.
+Module-level conditional import: edge-tts is imported at module load time inside a
+try/except ImportError block; the package is only required when CCGRAM_TTS_PROVIDER=edge.
 """
 
 from __future__ import annotations
