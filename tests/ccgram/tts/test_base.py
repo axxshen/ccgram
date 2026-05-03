@@ -1,5 +1,7 @@
+from dataclasses import FrozenInstanceError
+
 import pytest
-from ccgram.tts.base import TtsAudio, TtsSynthesisError, prepare_tts_text
+from ccgram.tts import TtsAudio, TtsSynthesisError, prepare_tts_text
 
 
 def test_prepare_tts_strips_pagination():
@@ -23,7 +25,7 @@ def test_prepare_tts_returns_empty_for_all_blank():
 
 def test_tts_audio_frozen():
     audio = TtsAudio(data=b"abc")
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         audio.data = b"xyz"  # type: ignore[misc]
 
 

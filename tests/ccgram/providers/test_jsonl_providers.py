@@ -619,7 +619,6 @@ class TestCustomToolCallOutput:
 
 class TestCodexToolCallIntegration:
     def test_function_call_then_output_shell_formatted(self) -> None:
-
         codex = CodexProvider()
         entries = [
             {
@@ -1299,7 +1298,6 @@ class TestCodexDiscoverTranscript:
         assert event is None
 
     def test_picks_most_recent_by_mtime(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         old = _write_codex_session(
             sessions_dir, "2026/03/01", "old", "uuid-old", "/my/project"
@@ -1345,7 +1343,6 @@ class TestCodexDiscoverTranscript:
         assert event is None
 
     def test_skips_stale_transcript(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         fpath = _write_codex_session(
             sessions_dir, "2026/03/01", "old-session", "uuid-old", "/my/project"
@@ -1359,7 +1356,6 @@ class TestCodexDiscoverTranscript:
         assert event is None
 
     def test_matches_fresh_transcript_only(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         stale = _write_codex_session(
             sessions_dir, "2026/03/01", "stale", "uuid-stale", "/my/project"
@@ -1511,7 +1507,6 @@ class TestCodexDiscoverTranscript:
 
 class TestCodexDiscoverTranscriptMaxAge:
     def test_max_age_zero_ignores_staleness(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         fpath = _write_codex_session(
             sessions_dir, "2026/03/01", "old-session", "uuid-old", "/my/project"
@@ -1526,7 +1521,6 @@ class TestCodexDiscoverTranscriptMaxAge:
         assert event.session_id == "uuid-old"
 
     def test_max_age_none_uses_default(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         fpath = _write_codex_session(
             sessions_dir, "2026/03/01", "old-session", "uuid-old", "/my/project"
@@ -1540,7 +1534,6 @@ class TestCodexDiscoverTranscriptMaxAge:
         assert event is None
 
     def test_explicit_max_age_respected(self, tmp_path: Path) -> None:
-
         sessions_dir = tmp_path / ".codex" / "sessions"
         fpath = _write_codex_session(
             sessions_dir, "2026/03/01", "session", "uuid-abc", "/my/project"
