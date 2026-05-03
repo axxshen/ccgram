@@ -169,6 +169,13 @@ class Config:
             "CCGRAM_WHISPER_LANGUAGE", "CCBOT_WHISPER_LANGUAGE"
         )
 
+        # Voice replies (text-to-speech)
+        # CCGRAM_TTS_PROVIDER: empty = disabled; "edge" = edge-tts backend
+        self.tts_provider: str = os.getenv("CCGRAM_TTS_PROVIDER", "")
+        self.tts_voice: str = os.getenv(
+            "CCGRAM_TTS_VOICE", "en-US-EmmaMultilingualNeural"
+        )
+
         # LLM command generation (shell provider) and toolbar config path.
         # toolbar_config_path resolution: env var → ~/.ccgram/toolbar.toml → "".
         # Empty string means "use built-in defaults". The handler layer passes

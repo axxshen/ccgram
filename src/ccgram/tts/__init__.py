@@ -1,6 +1,6 @@
 """TTS subpackage — text-to-speech synthesis providers.
 
-Public re-exports and shared text-preparation utility.
+Public re-exports, shared text-preparation utility, and provider factory.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ from .base import SpeechSynthesizer, TtsAudio, TtsSynthesisError
 
 _PAGINATION_RE = re.compile(r"\n\n\[\d+/\d+\]$")
 _USER_PREFIX = "\U0001f464 "
+
+_PROVIDERS = {"edge": "EdgeTtsSynthesizer"}
 
 
 def prepare_tts_text(parts: Iterable[str]) -> str:
@@ -31,9 +33,32 @@ def prepare_tts_text(parts: Iterable[str]) -> str:
     return plain_text.strip()
 
 
+def get_synthesizer() -> SpeechSynthesizer | None:
+    """Return a SpeechSynthesizer based on config, or None if TTS is disabled.
+
+    Returns None if tts_provider is not configured (empty string).
+    """
+    # Lazy: config singleton resolved by factory call
+    from ccgram.config import config
+
+    provider = config.tts_provider
+    if not provider:
+        return None
+
+    if provider not in _PROVIDERS:
+        msg = f"Unknown TTS provider: {provider!r}. Supported: {list(_PROVIDERS)}"
+        raise ValueError(msg)
+
+    # Lazy: optional dep, only when provider=edge
+    from .edge import EdgeTtsSynthesizer
+
+    return EdgeTtsSynthesizer(voice=config.tts_voice)
+
+
 __all__ = [
     "SpeechSynthesizer",
     "TtsAudio",
     "TtsSynthesisError",
+    "get_synthesizer",
     "prepare_tts_text",
 ]
