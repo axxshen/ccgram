@@ -129,6 +129,7 @@ class TestIsWindowId:
 class TestFindUsersForSession:
     @staticmethod
     def _ws(session_id: str):
+
         return WindowState(session_id=session_id, cwd="/tmp")
 
     def test_returns_matching_users(self, mgr: SessionManager) -> None:
@@ -160,6 +161,7 @@ class TestLoadSessionMapDisplayName:
     async def test_preserves_existing_display_name_on_stale_session_map(
         self, mgr: SessionManager, tmp_path, monkeypatch
     ) -> None:
+
         session_map_file = tmp_path / "session_map.json"
         session_map_file.write_text(
             json.dumps(
@@ -266,6 +268,7 @@ class TestPruneSessionMap:
     def test_removes_dead_windows(
         self, mgr: SessionManager, tmp_path, monkeypatch
     ) -> None:
+
         session_map_file = tmp_path / "session_map.json"
         session_map_file.write_text(
             json.dumps(
@@ -352,30 +355,36 @@ class TestPruneSessionMap:
 
 class TestWindowStateProviderName:
     def test_default_provider_name_is_empty(self) -> None:
+
         ws = WindowState()
         assert ws.provider_name == ""
 
     def test_to_dict_omits_empty_provider(self) -> None:
+
         ws = WindowState(session_id="s1", cwd="/tmp")
         d = ws.to_dict()
         assert "provider_name" not in d
 
     def test_to_dict_includes_provider_when_set(self) -> None:
+
         ws = WindowState(session_id="s1", cwd="/tmp", provider_name="codex")
         d = ws.to_dict()
         assert d["provider_name"] == "codex"
 
     def test_from_dict_reads_provider(self) -> None:
+
         ws = WindowState.from_dict(
             {"session_id": "s1", "cwd": "/tmp", "provider_name": "gemini"}
         )
         assert ws.provider_name == "gemini"
 
     def test_from_dict_defaults_to_empty(self) -> None:
+
         ws = WindowState.from_dict({"session_id": "s1", "cwd": "/tmp"})
         assert ws.provider_name == ""
 
     def test_round_trip_serialization(self) -> None:
+
         original = WindowState(
             session_id="s1",
             cwd="/tmp",
