@@ -71,7 +71,7 @@ def _truncate_caption(text: str) -> str:
     """Truncate at last whitespace boundary under the Telegram caption limit."""
     if len(text) <= _CAPTION_MAX_LENGTH:
         return text
-    truncated = text[:_CAPTION_MAX_LENGTH]
+    truncated = text[: _CAPTION_MAX_LENGTH - 1]
     last_ws = truncated.rfind(" ")
     if last_ws > 0:
         truncated = truncated[:last_ws]
@@ -94,7 +94,11 @@ async def _send_tts_voice(
     *,
     window_id: str,
 ) -> bool:
-    synthesizer = get_synthesizer()
+    try:
+        synthesizer = get_synthesizer()
+    except (ValueError, ImportError) as exc:
+        logger.warning("TTS not available for %s: %s", window_id, exc)
+        return False
     if synthesizer is None:
         return False
     try:
@@ -225,6 +229,7 @@ async def _merge_content_tasks(
             parts=tuple(merged_parts),
             tool_use_id=first.tool_use_id,
             content_type=first.content_type,
+            role=first.role,
             thread_id=first.thread_id,
         ),
         merge_count,
