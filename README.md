@@ -246,6 +246,8 @@ Open your Telegram group, create a new topic, send a message — a directory bro
 | `CCGRAM_LLM_PROVIDER`          | _(disabled)_      | LLM for shell command generation + completion summaries                    |
 | `CCGRAM_LLM_API_KEY`           | _(empty)_         | LLM API key (env only)                                                     |
 | `CCGRAM_WHISPER_PROVIDER`      | _(disabled)_      | Whisper provider for voice transcription (`openai`, `groq`)                |
+| `CCGRAM_TTS_PROVIDER`          | _(disabled)_      | TTS backend for voice replies (`edge`). Requires `pip install ccgram[tts]` |
+| `CCGRAM_TTS_VOICE`             | `en-US-EmmaMultilingualNeural` | Voice name for the selected TTS provider                      |
 | `CCGRAM_LIVE_VIEW_INTERVAL`    | `5`               | Live view refresh interval in seconds                                      |
 | `CCGRAM_LIVE_VIEW_TIMEOUT`     | `300`             | Live view auto-stop timeout in seconds                                     |
 | `CCGRAM_SEND_SEARCH_DEPTH`     | `5`               | Max directory depth for `/send` file search                                |
