@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 ContentType: TypeAlias = Literal["text", "tool_use", "tool_result"]
+MessageRole: TypeAlias = Literal["assistant", "user"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +19,7 @@ class ContentTask:
     window_id: str
     parts: tuple[str, ...]
     content_type: ContentType = "text"
+    role: MessageRole = "assistant"
     tool_use_id: str | None = None
     tool_name: str | None = None
     thread_id: int | None = None

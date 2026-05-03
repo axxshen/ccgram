@@ -27,9 +27,18 @@ class TestContentTask:
     def test_defaults(self):
         task = ContentTask(window_id="@0", parts=("x",))
         assert task.content_type == "text"
+        assert task.role == "assistant"
         assert task.tool_use_id is None
         assert task.tool_name is None
         assert task.thread_id is None
+
+    def test_role_defaults_to_assistant(self):
+        task = ContentTask(window_id="@0", parts=("x",))
+        assert task.role == "assistant"
+
+    def test_role_can_be_set_to_user(self):
+        task = ContentTask(window_id="@0", parts=("x",), role="user")
+        assert task.role == "user"
 
     def test_tool_use_fields(self):
         task = ContentTask(
