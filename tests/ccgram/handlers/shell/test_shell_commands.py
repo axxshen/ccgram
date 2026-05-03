@@ -588,6 +588,7 @@ class TestCancelStuckInput:
             )
 
     async def test_running_command_skips(self) -> None:
+
         with patch(f"{_MOD}.tmux_manager") as mock_tm:
             mock_tm.find_window_by_id = AsyncMock(
                 return_value=self._mock_window(pane_cmd="python3")
@@ -618,6 +619,7 @@ class TestCancelStuckInput:
             mock_tm.send_keys.assert_called_once()
 
     async def test_tail_dash_f_running_skips(self) -> None:
+
         with patch(f"{_MOD}.tmux_manager") as mock_tm:
             mock_tm.find_window_by_id = AsyncMock(
                 return_value=self._mock_window(pane_cmd="tail")
@@ -629,6 +631,7 @@ class TestCancelStuckInput:
             mock_tm.send_keys.assert_not_called()
 
     async def test_login_shell_detected(self) -> None:
+
         with patch(f"{_MOD}.tmux_manager") as mock_tm:
             mock_tm.find_window_by_id = AsyncMock(
                 return_value=self._mock_window(pane_cmd="-bash")

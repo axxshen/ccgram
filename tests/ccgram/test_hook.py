@@ -674,6 +674,7 @@ class TestClaudeSettingsFile:
         assert _claude_settings_file() == Path.home() / ".claude" / "settings.json"
 
     def test_respects_env_var(self, monkeypatch, tmp_path) -> None:
+
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "custom"))
         assert _claude_settings_file() == tmp_path / "custom" / "settings.json"
 
